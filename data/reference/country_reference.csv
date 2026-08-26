@@ -1,0 +1,31 @@
+country_code,country_name,region,income_group
+ARG,Argentina,Latin America & Caribbean,Upper middle income
+AUS,Australia,East Asia & Pacific,High income
+BRA,Brazil,Latin America & Caribbean,Upper middle income
+CAN,Canada,North America,High income
+CHN,China,East Asia & Pacific,Upper middle income
+DEU,Germany,Europe & Central Asia,High income
+EGY,"Egypt, Arab Rep.",Middle East & North Africa,Lower middle income
+ESP,Spain,Europe & Central Asia,High income
+ETH,Ethiopia,Sub-Saharan Africa,Low income
+FRA,France,Europe & Central Asia,High income
+GBR,United Kingdom,Europe & Central Asia,High income
+IDN,Indonesia,East Asia & Pacific,Upper middle income
+IND,India,South Asia,Lower middle income
+ITA,Italy,Europe & Central Asia,High income
+JPN,Japan,East Asia & Pacific,High income
+KEN,Kenya,Sub-Saharan Africa,Lower middle income
+KOR,"Korea, Rep.",East Asia & Pacific,High income
+MEX,Mexico,Latin America & Caribbean,Upper middle income
+NGA,Nigeria,Sub-Saharan Africa,Lower middle income
+NLD,Netherlands,Europe & Central Asia,High income
+NOR,Norway,Europe & Central Asia,High income
+POL,Poland,Europe & Central Asia,High income
+RUS,Russian Federation,Europe & Central Asia,Upper middle income
+SAU,Saudi Arabia,Middle East & North Africa,High income
+SWE,Sweden,Europe & Central Asia,High income
+THA,Thailand,East Asia & Pacific,Upper middle income
+TUR,Turkiye,Europe & Central Asia,Upper middle income
+USA,United States,North America,High income
+VNM,Vietnam,East Asia & Pacific,Lower middle income
+ZAF,South Africa,Sub-Saharan Africa,Upper middle income

@@ -1,0 +1,41 @@
+country_year,column,defect_type,detail
+EUU-2021,*,aggregate_row,regional/world aggregate mixed in with countries
+WLD-2015,*,aggregate_row,regional/world aggregate mixed in with countries
+KOR-2000,"gdp_usd,life_expectancy",conflicting_duplicate,"same country-year, later ingest, different values - needs a dedup rule"
+VNM-2013,"gdp_usd,life_expectancy",conflicting_duplicate,"same country-year, later ingest, different values - needs a dedup rule"
+BRA-2022,life_expectancy,decimal_shift,value divided by 10 (e.g. 6.7 years)
+KEN-2024,*,empty_record,"year outside coverage, every measure blank"
+AUS-2000,*,exact_duplicate,byte-identical repeat of an existing row
+IND-2011,*,exact_duplicate,byte-identical repeat of an existing row
+KEN-2021,population,float_artefact,"binary float noise, e.g. ...99999997"
+EGY-2010,life_expectancy,impossible_value,life expectancy of 187.4 years
+EGY-2011,access_to_electricity_pct,impossible_value,above 100%
+GBR-2005,unemployment_rate,impossible_value,percentage scaled by 100
+ZAF-2023,co2_emissions_per_capita,impossible_value,negative emissions
+GBR-2022,country_name,name_variant,canonical 'United Kingdom' written as 'UK'
+KOR-2003,country_name,name_variant,"canonical 'Korea, Rep.' written as 'South Korea'"
+RUS-2003,country_name,name_variant,canonical 'Russian Federation' written as 'Russia'
+TUR-2023,country_name,name_variant,canonical 'Turkiye' written as 'Türkiye'
+USA-2012,country_name,name_variant,canonical 'United States' written as 'USA'
+USA-2017,country_name,name_variant,canonical 'United States' written as 'United States of America'
+ZAF-2000,country_name,name_variant,canonical 'South Africa' written as 'South Africa '
+CAN-2010,life_expectancy,null_sentinel,missing value encoded as 'unknown'
+CHN-2003,unemployment_rate,null_sentinel,missing value encoded as ''
+FRA-2013,co2_emissions_per_capita,null_sentinel,missing value encoded as 'NaN'
+NGA-2011,gdp_usd,null_sentinel,missing value encoded as 'NULL'
+NOR-2013,access_to_electricity_pct,null_sentinel,missing value encoded as '..'
+TUR-2015,population,null_sentinel,missing value encoded as 'NULL'
+IRN-2019,*,orphan_record,country absent from country_reference.csv
+IRN-2020,*,orphan_record,country absent from country_reference.csv
+BRA-1899,year,out_of_range,year before dataset coverage
+ETH-2109,year,out_of_range,transposed digits -> future year
+AUS-2010,country_code,referential_integrity,name says Australia but code is AUT
+ZAF-2014,country_code,referential_integrity,name says South Africa but code is ZMB
+IND-2021,unemployment_rate,text_formatting,trailing percent sign
+TUR-2015,gdp_usd,text_formatting,currency symbol and thousands separators
+ZAF-2015,co2_emissions_per_capita,text_formatting,comma used as decimal separator
+RUS-2005.0,year,type_drift,year read as float then stringified
+THA-FY2013,year,type_drift,fiscal-year prefix
+KOR-2018,population,unit_mismatch,"reported in thousands, not persons"
+MEX-2023,gdp_usd,unit_mismatch,"reported in millions USD, not units"
+nor-2021,country_code,whitespace_or_case,padded or lower-cased ISO code
