@@ -77,7 +77,6 @@ world-bank-sql-data-pipeline/
 - GitHub
 - World Bank API
 
-## Current Progress
 
 ## Current Progress
 
