@@ -102,3 +102,51 @@ SELECT *
 FROM raw_world_bank_data
 WHERE access_to_electricity_pct < 0
    OR access_to_electricity_pct > 100;
+
+-- 16. Check country names that do not exist in the reference table
+
+SELECT DISTINCT r.country_name
+FROM raw_world_bank_data r
+LEFT JOIN country_reference c
+    ON r.country_name = c.country_name
+WHERE c.country_name IS NULL;
+
+-- 17. Check country codes that do not exist in the reference table
+
+SELECT DISTINCT
+    r.country_name,
+    r.country_code
+FROM raw_world_bank_data r
+LEFT JOIN country_reference c
+    ON r.country_code = c.country_code
+WHERE c.country_code IS NULL;
+
+-- 18. Check regions against reference data
+
+SELECT DISTINCT
+    r.country_name,
+    r.region AS raw_region,
+    c.region AS expected_region
+FROM raw_world_bank_data r
+JOIN country_reference c
+    ON r.country_code = c.country_code
+WHERE r.region <> c.region;
+
+-- 19. Check income groups against reference data
+
+SELECT DISTINCT
+    r.country_name,
+    r.income_group AS raw_income_group,
+    c.income_group AS expected_income_group
+FROM raw_world_bank_data r
+JOIN country_reference c
+    ON r.country_code = c.country_code
+WHERE r.income_group <> c.income_group;
+
+
+-- Profiling findings:
+-- Country names contain mismatches against the reference table.
+-- Country codes contain mismatches against the reference table.
+-- Region values contain mismatches against the reference table.
+-- Income group values contain mismatches against the reference table.
+-- These issues will be handled in the data cleaning phase.
