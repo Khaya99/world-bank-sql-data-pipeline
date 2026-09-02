@@ -83,7 +83,7 @@ world-bank-sql-data-pipeline/
 * [x] **Phase 1: Project Setup** - Created the repository structure and added the source files.
 * [x] **Phase 2: Data Ingestion** - Created the MySQL database and raw table, then loaded the raw dataset.
 * [x] **Phase 3: Data Profiling** - Examined the data for missing values, duplicates, invalid values and inconsistencies against the country reference data.
-* [ ] **Phase 4: Data Cleaning** - Clean and standardise the identified data quality issues.
+* [x] **Phase 4: Data Cleaning** - Clean and standardise the identified data quality issues.
 * [ ] **Phase 5: Data Validation** - Confirm that the cleaned data meets the required quality rules.
 * [ ] **Phase 6: Data Transformation** - Prepare the cleaned data and create derived metrics for analysis.
 * [ ] **Phase 7: SQL Analysis** - Analyse relationships between the economic and development indicators.
