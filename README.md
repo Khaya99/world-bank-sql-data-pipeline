@@ -86,5 +86,5 @@ world-bank-sql-data-pipeline/
 * [x] **Phase 4: Data Cleaning** - Clean and standardise the identified data quality issues.
 * [x] **Phase 5: Data Validation** - Confirm that the cleaned data meets the required quality rules.
 * [x] **Phase 6: Data Transformation** - Prepare the cleaned data and create derived metrics for analysis.
-* [ ] **Phase 7: SQL Analysis** - Analyse relationships between the economic and development indicators.
+* [x] **Phase 7: SQL Analysis** - Analyse relationships between the economic and development indicators.
 * [ ] **Phase 8: Data Visualisation** - Build Tableau visualisations to present the findings.
