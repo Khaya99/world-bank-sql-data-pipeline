@@ -129,8 +129,8 @@ SELECT DISTINCT
     c.region AS expected_region
 FROM raw_world_bank_data r
 JOIN country_reference c
-    ON r.country_code = c.country_code
-WHERE r.region <> c.region;
+    ON r.country_code = c.country_code  -- IF THE CODE ENDED HERE, IT WOUOLD'VE DROPPED EVERY MISMATCH
+WHERE r.region <> c.region; -- this line says to drop every GOOD MATCH AND RETURN ONLY THE MISMATCHES
 
 -- 19. Check income groups against reference data
 
