@@ -69,6 +69,28 @@ JOIN country_reference r
 SET c.country_code = r.country_code
 WHERE c.country_code <> r.country_code; 
 
+-- Standardise country names using the corrected country codes
+
+SET SQL_SAFE_UPDATES = 0;
+
+UPDATE cleaned_world_bank_data c
+JOIN country_reference r
+    ON c.country_code = r.country_code
+SET c.country_name = r.country_name
+WHERE c.country_name <> r.country_name;
+
+SET SQL_SAFE_UPDATES = 1;
+
+-- Verify country names match the reference table
+SELECT DISTINCT
+    c.country_name AS cleaned_country_name,
+    c.country_code,
+    r.country_name AS expected_country_name
+FROM cleaned_world_bank_data c
+JOIN country_reference r
+    ON c.country_code = r.country_code
+WHERE c.country_name <> r.country_name;
+
 -- Checking for the duplicate values in the cleaned table
 SELECT
     country_name,
