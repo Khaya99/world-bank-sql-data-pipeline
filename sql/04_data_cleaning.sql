@@ -350,7 +350,7 @@ WHERE gdp_usd IS NOT NULL
        gdp_usd LIKE '%,%'
        OR gdp_usd LIKE '%$%'
        OR gdp_usd LIKE '%\%%'
-       OR LOWER(TRIM(gdp_usd)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(gdp_usd)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
   
 -- Population
@@ -365,7 +365,7 @@ WHERE population IS NOT NULL
        population LIKE '%,%'
        OR population LIKE '%$%'
        OR population LIKE '%\%%'
-       OR LOWER(TRIM(population)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(population)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
 
 -- Life Expectancy
@@ -380,7 +380,7 @@ WHERE life_expectancy IS NOT NULL
        life_expectancy LIKE '%,%'
        OR life_expectancy LIKE '%$%'
        OR life_expectancy LIKE '%\%%'
-       OR LOWER(TRIM(life_expectancy)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(life_expectancy)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
 
 -- Unemployment Rate
@@ -395,7 +395,7 @@ WHERE unemployment_rate IS NOT NULL
        unemployment_rate LIKE '%,%'
        OR unemployment_rate LIKE '%$%'
        OR unemployment_rate LIKE '%\%%'
-       OR LOWER(TRIM(unemployment_rate)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(unemployment_rate)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
 
 -- CO2 Emissions Per Capita
@@ -410,7 +410,7 @@ WHERE co2_emissions_per_capita IS NOT NULL
        co2_emissions_per_capita LIKE '%,%'
        OR co2_emissions_per_capita LIKE '%$%'
        OR co2_emissions_per_capita LIKE '%\%%'
-       OR LOWER(TRIM(co2_emissions_per_capita)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(co2_emissions_per_capita)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
 
 -- Access to Electricity
@@ -425,7 +425,7 @@ WHERE access_to_electricity_pct IS NOT NULL
        access_to_electricity_pct LIKE '%,%'
        OR access_to_electricity_pct LIKE '%$%'
        OR access_to_electricity_pct LIKE '%\%%'
-       OR LOWER(TRIM(access_to_electricity_pct)) IN ('n/a', 'na', 'unknown', 'null', '..')
+       OR LOWER(TRIM(access_to_electricity_pct)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
   );
   
 --
