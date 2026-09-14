@@ -1,152 +1,399 @@
-USE world_bank_project;
+-- World Bank SQL Data Pipeline
+-- PostgreSQL raw-data profiling
 
--- 1. Total number of rows
-SELECT COUNT(*) AS total_rows
-FROM raw_world_bank_data;
+-- Read-only queries: this script does not modify data.
 
--- 2. Preview the first few rows
-SELECT *
-FROM raw_world_bank_data
-LIMIT 10;
-
--- 3. Check the year range
-SELECT 
-    MIN(year) AS earliest_year,
-    MAX(year) AS latest_year
-FROM raw_world_bank_data;
-
--- 4. Count unique countries
-SELECT COUNT(DISTINCT country_name) AS total_countries
-FROM raw_world_bank_data;
-
--- 5. Check unique regions
-SELECT DISTINCT region
-FROM raw_world_bank_data
-ORDER BY region;
-
--- 6. Check unique income groups
-SELECT DISTINCT income_group
-FROM raw_world_bank_data
-ORDER BY income_group;
-
--- 7. Check missing and blank values
+-- 
+-- 1. Confirm the raw-data baseline
+-- 
 
 SELECT
-    SUM(country_name IS NULL OR TRIM(country_name) = '') AS missing_country_name,
-    SUM(country_code IS NULL OR TRIM(country_code) = '') AS missing_country_code,
-    SUM(region IS NULL OR TRIM(region) = '') AS missing_region,
-    SUM(income_group IS NULL OR TRIM(income_group) = '') AS missing_income_group,
-    SUM(year IS NULL OR TRIM(year) = '') AS missing_year,
-    SUM(gdp_usd IS NULL OR TRIM(gdp_usd) = '') AS missing_gdp,
-    SUM(population IS NULL OR TRIM(population) = '') AS missing_population,
-    SUM(life_expectancy IS NULL OR TRIM(life_expectancy) = '') AS missing_life_expectancy,
-    SUM(unemployment_rate IS NULL OR TRIM(unemployment_rate) = '') AS missing_unemployment,
-    SUM(co2_emissions_per_capita IS NULL OR TRIM(co2_emissions_per_capita) = '') AS missing_co2,
-    SUM(access_to_electricity_pct IS NULL OR TRIM(access_to_electricity_pct) = '') AS missing_electricity
-FROM raw_world_bank_data;
+    COUNT(*) AS raw_row_count,
+    COUNT(DISTINCT raw_record_id) AS unique_raw_ids,
+    COUNT(
+        DISTINCT NULLIF(BTRIM(country_code), '')
+    ) AS distinct_country_codes,
+    COUNT(
+        DISTINCT NULLIF(BTRIM(country_name), '')
+    ) AS distinct_country_names,
+    COUNT(*) FILTER (
+        WHERE pipeline_loaded_at IS NULL
+    ) AS missing_pipeline_timestamps
+FROM raw.world_bank_data;
 
--- 8. Check duplicate country-year records
+
+-- 
+-- 2. Find raw entities absent from the country reference
+-- 
 
 SELECT
+    NULLIF(BTRIM(r.country_code), '') AS country_code,
+    NULLIF(BTRIM(r.country_name), '') AS country_name,
+    COUNT(*) AS row_count,
+    MIN(NULLIF(BTRIM(r.year), '')) AS first_year,
+    MAX(NULLIF(BTRIM(r.year), '')) AS last_year
+FROM raw.world_bank_data r
+LEFT JOIN reference.country_reference c
+    ON NULLIF(BTRIM(r.country_code), '') = c.country_code
+WHERE c.country_code IS NULL
+GROUP BY
+    NULLIF(BTRIM(r.country_code), ''),
+    NULLIF(BTRIM(r.country_name), '')
+ORDER BY
+    country_code,
+    country_name;
+
+
+-- 
+-- 3. Classify every non-reference record
+-- 
+
+SELECT
+    r.raw_record_id,
+    NULLIF(BTRIM(r.country_code), '') AS raw_country_code,
+    NULLIF(BTRIM(r.country_name), '') AS raw_country_name,
+    NULLIF(BTRIM(r.year), '') AS raw_year,
+    c_by_name.country_code AS expected_country_code,
+    CASE
+        WHEN UPPER(BTRIM(r.country_code)) IN ('EUU', 'WLD')
+            THEN 'aggregate entity'
+        WHEN c_by_name.country_code IS NOT NULL
+            THEN 'country-code mismatch'
+        ELSE 'outside approved reference scope'
+    END AS issue_type
+FROM raw.world_bank_data r
+LEFT JOIN reference.country_reference c_by_code
+    ON BTRIM(r.country_code) = c_by_code.country_code
+LEFT JOIN reference.country_reference c_by_name
+    ON BTRIM(r.country_name) = c_by_name.country_name
+WHERE c_by_code.country_code IS NULL
+ORDER BY
+    raw_country_code,
+    raw_year,
+    r.raw_record_id;
+
+
+-- 
+-- 4. Check country names against the reference
+--
+
+SELECT
+    BTRIM(r.country_code) AS country_code,
+    NULLIF(BTRIM(r.country_name), '') AS raw_country_name,
+    c.country_name AS expected_country_name,
+    COUNT(*) AS row_count,
+    MIN(NULLIF(BTRIM(r.year), '')) AS first_year,
+    MAX(NULLIF(BTRIM(r.year), '')) AS last_year
+FROM raw.world_bank_data r
+JOIN reference.country_reference c
+    ON BTRIM(r.country_code) = c.country_code
+WHERE NULLIF(BTRIM(r.country_name), '')
+      IS DISTINCT FROM c.country_name
+GROUP BY
+    BTRIM(r.country_code),
+    NULLIF(BTRIM(r.country_name), ''),
+    c.country_name
+ORDER BY country_code, raw_country_name;
+
+
+-- 
+-- 5. Check regions against the reference
+-- 
+SELECT
+    BTRIM(r.country_code) AS country_code,
+    c.country_name,
+    NULLIF(BTRIM(r.region), '') AS raw_region,
+    c.region AS expected_region,
+    COUNT(*) AS row_count
+FROM raw.world_bank_data r
+JOIN reference.country_reference c
+    ON BTRIM(r.country_code) = c.country_code
+WHERE NULLIF(BTRIM(r.region), '')
+      IS DISTINCT FROM c.region
+GROUP BY
+    BTRIM(r.country_code),
+    c.country_name,
+    NULLIF(BTRIM(r.region), ''),
+    c.region
+ORDER BY country_code, raw_region;
+
+
+-- 
+-- 6. Check income groups against the reference
+-- 
+
+SELECT
+    BTRIM(r.country_code) AS country_code,
+    c.country_name,
+    NULLIF(BTRIM(r.income_group), '') AS raw_income_group,
+    c.income_group AS expected_income_group,
+    COUNT(*) AS row_count
+FROM raw.world_bank_data r
+JOIN reference.country_reference c
+    ON BTRIM(r.country_code) = c.country_code
+WHERE NULLIF(BTRIM(r.income_group), '')
+      IS DISTINCT FROM c.income_group
+GROUP BY
+    BTRIM(r.country_code),
+    c.country_name,
+    NULLIF(BTRIM(r.income_group), ''),
+    c.income_group
+ORDER BY country_code, raw_income_group;
+
+
+-- 
+-- 7. Count missing or blank values by source column
+-- 
+
+SELECT
+    v.column_name,
+    COUNT(*) AS missing_or_blank_count
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        (1,  'country_name',                r.country_name),
+        (2,  'country_code',                r.country_code),
+        (3,  'region',                      r.region),
+        (4,  'income_group',                r.income_group),
+        (5,  'year',                        r.year),
+        (6,  'gdp_usd',                     r.gdp_usd),
+        (7,  'population',                  r.population),
+        (8,  'life_expectancy',             r.life_expectancy),
+        (9,  'unemployment_rate',           r.unemployment_rate),
+        (10, 'co2_emissions_per_capita',    r.co2_emissions_per_capita),
+        (11, 'access_to_electricity_pct',   r.access_to_electricity_pct),
+        (12, 'source_file',                 r.source_file),
+        (13, 'ingested_at',                 r.ingested_at)
+) AS v(column_order, column_name, column_value)
+WHERE NULLIF(BTRIM(v.column_value), '') IS NULL
+GROUP BY
+    v.column_order,
+    v.column_name
+ORDER BY v.column_order;
+
+
+-- 
+-- 8. Identify records and columns containing missing values
+-- 
+
+SELECT
+    r.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year,
+    STRING_AGG(
+        v.column_name,
+        ', ' ORDER BY v.column_order
+    ) AS missing_columns
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        (1,  'country_name',                r.country_name),
+        (2,  'country_code',                r.country_code),
+        (3,  'region',                      r.region),
+        (4,  'income_group',                r.income_group),
+        (5,  'year',                        r.year),
+        (6,  'gdp_usd',                     r.gdp_usd),
+        (7,  'population',                  r.population),
+        (8,  'life_expectancy',             r.life_expectancy),
+        (9,  'unemployment_rate',           r.unemployment_rate),
+        (10, 'co2_emissions_per_capita',    r.co2_emissions_per_capita),
+        (11, 'access_to_electricity_pct',   r.access_to_electricity_pct),
+        (12, 'source_file',                 r.source_file),
+        (13, 'ingested_at',                 r.ingested_at)
+) AS v(column_order, column_name, column_value)
+WHERE NULLIF(BTRIM(v.column_value), '') IS NULL
+GROUP BY
+    r.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year
+ORDER BY r.raw_record_id;
+
+
+-- 
+-- 9. Check year format and range
+-- 
+
+SELECT
+    raw_record_id,
+    country_code,
+    country_name,
+    year AS raw_year,
+    CASE
+        WHEN NULLIF(BTRIM(year), '') IS NULL
+            THEN 'missing year'
+        WHEN BTRIM(year) !~ '^[0-9]{4}$'
+            THEN 'invalid year format'
+        ELSE 'outside 2000-2023 range'
+    END AS issue_type
+FROM raw.world_bank_data
+WHERE CASE
+    WHEN NULLIF(BTRIM(year), '') ~ '^[0-9]{4}$'
+        THEN BTRIM(year)::INTEGER NOT BETWEEN 2000 AND 2023
+    ELSE TRUE
+END
+ORDER BY raw_record_id;
+
+
+-- 
+-- 10. Find non-numeric indicator values
+-- 
+
+SELECT
+    r.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year,
+    v.column_name,
+    BTRIM(v.raw_value) AS raw_value
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        ('gdp_usd',                   r.gdp_usd),
+        ('population',                r.population),
+        ('life_expectancy',           r.life_expectancy),
+        ('unemployment_rate',         r.unemployment_rate),
+        ('co2_emissions_per_capita',  r.co2_emissions_per_capita),
+        ('access_to_electricity_pct', r.access_to_electricity_pct)
+) AS v(column_name, raw_value)
+WHERE NULLIF(BTRIM(v.raw_value), '') IS NOT NULL
+  AND BTRIM(v.raw_value) !~
+      '^[+-]?[0-9]+([.][0-9]+)?$'
+ORDER BY r.raw_record_id, v.column_name;
+
+
+-- 
+-- 11. Find numeric values outside acceptable ranges
+-- 
+
+SELECT
+    r.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year,
+    v.column_name,
+    BTRIM(v.raw_value) AS raw_value,
+    v.minimum_allowed,
+    v.maximum_allowed
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        ('gdp_usd',                   r.gdp_usd,                    0::NUMERIC, NULL::NUMERIC),
+        ('population',                r.population,                 0::NUMERIC, NULL::NUMERIC),
+        ('life_expectancy',           r.life_expectancy,            0::NUMERIC, 120::NUMERIC),
+        ('unemployment_rate',         r.unemployment_rate,          0::NUMERIC, 100::NUMERIC),
+        ('co2_emissions_per_capita',  r.co2_emissions_per_capita,   0::NUMERIC, NULL::NUMERIC),
+        ('access_to_electricity_pct', r.access_to_electricity_pct,  0::NUMERIC, 100::NUMERIC)
+) AS v(column_name, raw_value, minimum_allowed, maximum_allowed)
+WHERE CASE
+    WHEN NULLIF(BTRIM(v.raw_value), '') ~
+         '^[+-]?[0-9]+([.][0-9]+)?$'
+    THEN
+        BTRIM(v.raw_value)::NUMERIC < v.minimum_allowed
+        OR (
+            v.maximum_allowed IS NOT NULL
+            AND BTRIM(v.raw_value)::NUMERIC > v.maximum_allowed
+        )
+    ELSE FALSE
+END
+ORDER BY r.raw_record_id, v.column_name;
+
+
+-- 
+-- 12. Find exact duplicate source records
+-- 
+
+SELECT
+    country_code,
     country_name,
     year,
-    COUNT(*) AS duplicate_count
-FROM raw_world_bank_data
-GROUP BY country_name, year
-HAVING COUNT(*) > 1;
+    COUNT(*) AS duplicate_count,
+    ARRAY_AGG(
+        raw_record_id ORDER BY raw_record_id
+    ) AS raw_record_ids
+FROM raw.world_bank_data
+GROUP BY
+    country_name,
+    country_code,
+    region,
+    income_group,
+    year,
+    gdp_usd,
+    population,
+    life_expectancy,
+    unemployment_rate,
+    co2_emissions_per_capita,
+    access_to_electricity_pct,
+    source_file,
+    ingested_at
+HAVING COUNT(*) > 1
+ORDER BY country_code, year;
 
--- Check impossible numeric values
 
--- 9. Check for invalid year values
+-- 
+-- 13. Find all duplicate country-year combinations
+-- 
+
+SELECT
+    NULLIF(BTRIM(country_code), '') AS country_code,
+    NULLIF(BTRIM(year), '') AS year,
+    STRING_AGG(
+        DISTINCT NULLIF(BTRIM(country_name), ''),
+        ' | '
+    ) AS country_names,
+    COUNT(*) AS record_count,
+    ARRAY_AGG(
+        raw_record_id ORDER BY raw_record_id
+    ) AS raw_record_ids
+FROM raw.world_bank_data
+GROUP BY
+    NULLIF(BTRIM(country_code), ''),
+    NULLIF(BTRIM(year), '')
+HAVING COUNT(*) > 1
+ORDER BY country_code, year;
+
+
+-- 
+-- 14. Inspect conflicting duplicate records
+-- 
 
 SELECT *
-FROM raw_world_bank_data
-WHERE year < '2000'
-   OR year > '2023';
+FROM raw.world_bank_data
+WHERE (BTRIM(country_code) = 'KOR' AND BTRIM(year) = '2000')
+   OR (BTRIM(country_code) = 'VNM' AND BTRIM(year) = '2013')
+ORDER BY country_code, year, raw_record_id;
 
--- 10. Check for invalid GDP values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE gdp_usd < 0;
-
--- 11. Check for invalid population values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE population < 0;
-
--- 12. Check for invalid life expectancy values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE life_expectancy < 0
-   OR life_expectancy > 120;
-
--- 13. Check for invalid unemployment values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE unemployment_rate < 0
-   OR unemployment_rate > 100;
-
--- 14. Check invalid CO2 emission values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE co2_emissions_per_capita < 0;
-
--- 15. Check for invalid access to electricity values
-
-SELECT *
-FROM raw_world_bank_data
-WHERE access_to_electricity_pct < 0
-   OR access_to_electricity_pct > 100;
-
--- 16. Check country names that do not exist in the reference table
-
-SELECT DISTINCT r.country_name
-FROM raw_world_bank_data r
-LEFT JOIN country_reference c
-    ON r.country_name = c.country_name
-WHERE c.country_name IS NULL;
-
--- 17. Check country codes that do not exist in the reference table
-
-SELECT DISTINCT
-    r.country_name,
-    r.country_code
-FROM raw_world_bank_data r
-LEFT JOIN country_reference c
-    ON r.country_code = c.country_code
-WHERE c.country_code IS NULL;
-
--- 18. Check regions against reference data
-
-SELECT DISTINCT
-    r.country_name,
-    r.region AS raw_region,
-    c.region AS expected_region
-FROM raw_world_bank_data r
-JOIN country_reference c
-    ON r.country_code = c.country_code  -- IF THE CODE ENDED HERE, IT WOUOLD'VE DROPPED EVERY MISMATCH
-WHERE r.region <> c.region; -- this line says to drop every GOOD MATCH AND RETURN ONLY THE MISMATCHES
-
--- 19. Check income groups against reference data
-
-SELECT DISTINCT
-    r.country_name,
-    r.income_group AS raw_income_group,
-    c.income_group AS expected_income_group
-FROM raw_world_bank_data r
-JOIN country_reference c
-    ON r.country_code = c.country_code
-WHERE r.income_group <> c.income_group;
+-- Inspect the duplicates further
+SELECT
+    raw_record_id,
+    country_code,
+    year,
+    gdp_usd,
+    population,
+    life_expectancy,
+    unemployment_rate,
+    co2_emissions_per_capita,
+    access_to_electricity_pct,
+    source_file
+FROM raw.world_bank_data
+WHERE (BTRIM(country_code) = 'KOR' AND BTRIM(year) = '2000')
+   OR (BTRIM(country_code) = 'VNM' AND BTRIM(year) = '2013')
+ORDER BY country_code, year, raw_record_id;
 
 
--- Profiling findings:
--- Country names contain mismatches against the reference table.
--- Country codes contain mismatches against the reference table.
--- Region values contain mismatches against the reference table.
--- Income group values contain mismatches against the reference table.
--- These issues will be handled in the data cleaning phase.
+-- 
+-- 15. Find missing expected country-year records
+-- 
+
+SELECT
+    c.country_code,
+    c.country_name,
+    y.expected_year AS missing_year
+FROM reference.country_reference c
+CROSS JOIN generate_series(2000, 2023) AS y(expected_year)
+LEFT JOIN raw.world_bank_data r
+    ON BTRIM(r.country_code) = c.country_code
+   AND BTRIM(r.year) = y.expected_year::TEXT
+WHERE r.raw_record_id IS NULL
+ORDER BY c.country_code, y.expected_year;
