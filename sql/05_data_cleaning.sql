@@ -1,640 +1,585 @@
-USE world_bank_project;
+-- 
+-- World Bank SQL Data Pipeline
+-- PostgreSQL data cleaning
+-- 
 
--- Create a copy of the raw data
-CREATE TABLE cleaned_world_bank_data AS
-SELECT *
-FROM raw_world_bank_data;
+-- Cleaning rules:
+-- 1. raw.world_bank_data remains unchanged.
+-- 2. Recoverable problems are corrected in staging.
+-- 3. Unrecoverable records are excluded and logged.
+-- 4. Every action remains traceable through raw_record_id.
 
-SELECT COUNT(*) AS total_rows
-FROM cleaned_world_bank_data;
 
--- Remove extra spaces in the data
-UPDATE cleaned_world_bank_data
-SET
-    country_name = TRIM(country_name),
-    country_code = TRIM(country_code),
-    region = TRIM(region),
-    income_group = TRIM(income_group);
-    
--- Fix the wrong data compared to the reference data
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-SET
-    c.country_name = r.country_name,
-    c.region = r.region,
-    c.income_group = r.income_group;
+-- 
+-- 1. Create the data-quality audit log
+-- 
 
--- Fix the incorrect country codes with the reference data
-SELECT
-    c.country_name,
-    c.country_code AS incorrect_code,
-    r.country_code AS correct_code
-FROM cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_name = r.country_name
-WHERE c.country_code <> r.country_code;
+BEGIN;
 
--- Fixing the incorrect country codes
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_name = r.country_name
-SET c.country_code = r.country_code
-WHERE c.country_code <> r.country_code;
+CREATE TABLE IF NOT EXISTS audit.data_quality_log (
+    issue_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    raw_record_id BIGINT NOT NULL
+        REFERENCES raw.world_bank_data(raw_record_id),
+    column_name TEXT NOT NULL DEFAULT 'row',
+    issue_type TEXT NOT NULL,
+    original_value TEXT,
+    cleaned_value TEXT,
+    action_taken TEXT NOT NULL,
+    logged_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
--- Checking that the updates worked from dirty to clean
-SELECT DISTINCT
-    c.country_name,
-    c.country_code
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL;
-
--- Verify the countries that appeared from the reference data
-SELECT *
-FROM country_reference
-WHERE country_name IN (
-    'Iran',
-    'European Union',
-    'Australia',
-    'South Africa',
-    'World'
+    UNIQUE (raw_record_id, column_name, issue_type)
 );
 
--- Fix the country code for South Africa and Australia
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_name = r.country_name
-SET c.country_code = r.country_code
-WHERE c.country_code <> r.country_code; 
+COMMIT;
 
--- Standardise country names using the corrected country codes
 
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-SET c.country_name = r.country_name
-WHERE c.country_name <> r.country_name;
-
-SET SQL_SAFE_UPDATES = 1;
-
--- Verify country names match the reference table
-SELECT DISTINCT
-    c.country_name AS cleaned_country_name,
-    c.country_code,
-    r.country_name AS expected_country_name
-FROM cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE c.country_name <> r.country_name;
-
--- Checking for the duplicate values in the cleaned table
+-- Verify that the audit table exists
 SELECT
-    country_name,
+    table_schema,
+    table_name
+FROM information_schema.tables
+WHERE table_schema = 'audit'
+  AND table_name = 'data_quality_log';
+
+
+-- 
+-- 2. Create the cleaned staging table
+-- 
+
+CREATE TABLE IF NOT EXISTS staging.world_bank_data_clean (
+    raw_record_id BIGINT PRIMARY KEY
+        REFERENCES raw.world_bank_data(raw_record_id),
+
+    country_code TEXT NOT NULL
+        REFERENCES reference.country_reference(country_code),
+    country_name TEXT NOT NULL,
+    region TEXT NOT NULL,
+    income_group TEXT NOT NULL,
+    year SMALLINT NOT NULL CHECK (year BETWEEN 2000 AND 2023),
+
+    gdp_usd NUMERIC(20, 2) CHECK (gdp_usd >= 0),
+    population BIGINT CHECK (population >= 0),
+    life_expectancy NUMERIC(5, 2)
+        CHECK (life_expectancy BETWEEN 0 AND 120),
+    unemployment_rate NUMERIC(5, 2)
+        CHECK (unemployment_rate BETWEEN 0 AND 100),
+    co2_emissions_per_capita NUMERIC(10, 4)
+        CHECK (co2_emissions_per_capita >= 0),
+    access_to_electricity_pct NUMERIC(5, 2)
+        CHECK (access_to_electricity_pct BETWEEN 0 AND 100),
+
+    source_file TEXT NOT NULL,
+    ingested_at TIMESTAMP NOT NULL,
+    pipeline_loaded_at TIMESTAMPTZ NOT NULL,
+    cleaned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (country_code, year)
+);
+
+
+-- Verify the table structure
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'staging'
+  AND table_name = 'world_bank_data_clean'
+ORDER BY ordinal_position;
+
+
+-- 
+-- 3. Quarantine unusable records
+-- 
+
+-- Entities outside the approved reference scope
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    action_taken
+)
+SELECT
+    r.raw_record_id,
+    'row',
+    'outside_reference_scope',
+    CONCAT_WS(' | ', BTRIM(r.country_code), BTRIM(r.country_name)),
+    'quarantined'
+FROM raw.world_bank_data r
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM reference.country_reference c
+    WHERE c.country_code = UPPER(BTRIM(r.country_code))
+       OR c.country_name = BTRIM(r.country_name)
+)
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
+
+
+-- Numeric years outside 2000–2023
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    action_taken
+)
+SELECT
+    raw_record_id,
+    'year',
+    'year_out_of_range',
+    BTRIM(year),
+    'quarantined'
+FROM raw.world_bank_data
+WHERE BTRIM(year) ~ '^[0-9]{4}$'
+  AND BTRIM(year) NOT BETWEEN '2000' AND '2023'
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
+
+
+-- Verify quarantined records
+SELECT
+    q.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year,
+    q.issue_type
+FROM audit.data_quality_log q
+JOIN raw.world_bank_data r
+    ON r.raw_record_id = q.raw_record_id
+WHERE q.action_taken = 'quarantined'
+ORDER BY q.raw_record_id;
+
+
+-- 
+-- 4. Log safe code and year corrections
+-- 
+
+-- Correct country codes by matching the country name
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    r.raw_record_id,
+    'country_code',
+    'country_code_standardized',
+    r.country_code,
+    c.country_code,
+    'corrected'
+FROM raw.world_bank_data r
+JOIN reference.country_reference c
+    ON BTRIM(r.country_name) = c.country_name
+WHERE BTRIM(r.country_code) IS DISTINCT FROM c.country_code
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
+
+
+-- Correct safely recoverable year formats
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    raw_record_id,
+    'year',
+    'year_format_standardized',
     year,
-    COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data
-GROUP BY country_name, year
-HAVING COUNT(*) > 1;
-
--- Determine if the data is exact duplicate or conflicting duplicate
-SELECT *
-FROM cleaned_world_bank_data
-WHERE (country_name = 'Australia' AND year = '2000')
-   OR (country_name = 'Korea, Rep.' AND year = '2000')
-   OR (country_name = 'Vietnam' AND year = '2013')
-   OR (country_name = 'India' AND year = '2011')
-ORDER BY country_name, year;
-
--- Duplicate cleaning notes:
--- Australia 2000: exact duplicate
--- India 2011: exact duplicate
--- Korea, Rep. 2000: conflicting duplicate (life_expectancy)
--- Vietnam 2013: conflicting duplicate (life_expectancy)
---
--- Exact duplicates can be safely deduplicated.
--- Conflicting duplicates require further investigation before correction.
+    CASE
+        WHEN BTRIM(year) ~ '^FY[0-9]{4}$'
+            THEN RIGHT(BTRIM(year), 4)
+        WHEN BTRIM(year) ~ '^[0-9]{4}\.0$'
+            THEN SPLIT_PART(BTRIM(year), '.', 1)
+    END,
+    'corrected'
+FROM raw.world_bank_data
+WHERE BTRIM(year) ~ '^FY[0-9]{4}$'
+   OR BTRIM(year) ~ '^[0-9]{4}\.0$'
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
 
 
--- Inspect rows containing missing values
-
-SELECT *
-FROM cleaned_world_bank_data
-WHERE country_name IS NULL OR TRIM(country_name) = ''
-   OR country_code IS NULL OR TRIM(country_code) = ''
-   OR region IS NULL OR TRIM(region) = ''
-   OR income_group IS NULL OR TRIM(income_group) = ''
-   OR year IS NULL OR TRIM(year) = ''
-   OR gdp_usd IS NULL OR TRIM(gdp_usd) = ''
-   OR population IS NULL OR TRIM(population) = ''
-   OR life_expectancy IS NULL OR TRIM(life_expectancy) = ''
-   OR unemployment_rate IS NULL OR TRIM(unemployment_rate) = ''
-   OR co2_emissions_per_capita IS NULL OR TRIM(co2_emissions_per_capita) = ''
-   OR access_to_electricity_pct IS NULL OR TRIM(access_to_electricity_pct) = '';
-   
--- Missing value findings:
--- Kenya: multiple fields are missing.
--- China: unemployment_rate is missing.
--- Nigeria: gdp_usd is missing.
--- Türkiye: population is missing.
---
--- Missing values will not automatically be replaced with 0 or estimated.
--- Records will be retained or quarantined based on whether they can be reliably used in final analysis
-
--- Kenya missing values
-
-SELECT *
-FROM cleaned_world_bank_data
-WHERE country_name = 'Kenya'
-  AND (
-       country_code IS NULL OR TRIM(country_code) = ''
-       OR region IS NULL OR TRIM(region) = ''
-       OR income_group IS NULL OR TRIM(income_group) = ''
-       OR year IS NULL OR TRIM(year) = ''
-       OR gdp_usd IS NULL OR TRIM(gdp_usd) = ''
-       OR population IS NULL OR TRIM(population) = ''
-       OR life_expectancy IS NULL OR TRIM(life_expectancy) = ''
-       OR unemployment_rate IS NULL OR TRIM(unemployment_rate) = ''
-       OR co2_emissions_per_capita IS NULL OR TRIM(co2_emissions_per_capita) = ''
-       OR access_to_electricity_pct IS NULL OR TRIM(access_to_electricity_pct) = ''
-  );
-
--- Kenya record contains extensive missing data:
--- region, income_group, GDP, population, life expectancy,
--- unemployment rate, CO2 emissions and electricity access.
--- The record cannot provide meaningful analysis.
--- Marked for quarantine rather than estimating missing values.
+-- Verify the corrections
+SELECT
+    raw_record_id,
+    column_name,
+    original_value,
+    cleaned_value,
+    action_taken
+FROM audit.data_quality_log
+WHERE issue_type IN (
+    'country_code_standardized',
+    'year_format_standardized'
+)
+ORDER BY raw_record_id;
 
 
---
--- INVALID VALUES
---
+-- 
+-- 5. Log reference-value standardization
+-- 
 
--- Check negative GDP
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(gdp_usd AS DECIMAL(30,2)) < 0;
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    r.raw_record_id,
+    'reference_fields',
+    'reference_values_standardized',
+    CONCAT_WS(
+        ' | ',
+        NULLIF(BTRIM(r.country_name), ''),
+        NULLIF(BTRIM(r.region), ''),
+        NULLIF(BTRIM(r.income_group), '')
+    ),
+    CONCAT_WS(
+        ' | ',
+        c.country_name,
+        c.region,
+        c.income_group
+    ),
+    'corrected'
+FROM raw.world_bank_data r
+JOIN reference.country_reference c
+    ON c.country_code = UPPER(BTRIM(r.country_code))
+    OR c.country_name = BTRIM(r.country_name)
+WHERE NULLIF(BTRIM(r.country_name), '') IS DISTINCT FROM c.country_name
+   OR NULLIF(BTRIM(r.region), '') IS DISTINCT FROM c.region
+   OR NULLIF(BTRIM(r.income_group), '') IS DISTINCT FROM c.income_group
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
 
--- Check negative population
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(population AS DECIMAL(30,2)) < 0;
 
--- Check unrealistic life expectancy
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(life_expectancy AS DECIMAL(10,2)) < 0
-   OR CAST(life_expectancy AS DECIMAL(10,2)) > 120;
+-- Verify the recorded corrections
+SELECT
+    raw_record_id,
+    original_value,
+    cleaned_value,
+    action_taken
+FROM audit.data_quality_log
+WHERE issue_type = 'reference_values_standardized'
+ORDER BY raw_record_id;
 
--- Check invalid unemployment rates
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(unemployment_rate AS DECIMAL(10,2)) < 0
-   OR CAST(unemployment_rate AS DECIMAL(10,2)) > 100;
 
--- Check negative CO2 emissions
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(co2_emissions_per_capita AS DECIMAL(10,2)) < 0;
+-- 
+-- 6. Log recoverable numeric-format corrections
+-- 
 
--- Check invalid electricity access
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(access_to_electricity_pct AS DECIMAL(10,2)) < 0
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) > 100;
-   
-
--- Replace confirmed impossible values with NULL
-
-UPDATE cleaned_world_bank_data
-SET life_expectancy = NULL
-WHERE CAST(life_expectancy AS DECIMAL(10,2)) > 120
-   OR CAST(life_expectancy AS DECIMAL(10,2)) < 0;
-
-UPDATE cleaned_world_bank_data
-SET unemployment_rate = NULL
-WHERE CAST(unemployment_rate AS DECIMAL(10,2)) > 100
-   OR CAST(unemployment_rate AS DECIMAL(10,2)) < 0;
-
-UPDATE cleaned_world_bank_data
-SET co2_emissions_per_capita = NULL
-WHERE CAST(co2_emissions_per_capita AS DECIMAL(10,2)) < 0;
-
-UPDATE cleaned_world_bank_data
-SET access_to_electricity_pct = NULL
-WHERE CAST(access_to_electricity_pct AS DECIMAL(10,2)) > 100
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) < 0;
-   
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(access_to_electricity_pct AS DECIMAL(10,2)) < 0
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) > 100;
-
--- The value was not updated to NULL for United Kingdom with unemployment rate
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data
-SET unemployment_rate = NULL
-WHERE country_name = 'United Kingdom'
-  AND year = '2005'
-  AND unemployment_rate = '652.0';
-
-SELECT country_name, year, unemployment_rate
-FROM cleaned_world_bank_data
-WHERE country_name = 'United Kingdom'
-  AND year = '2005';
-
-SET SQL_SAFE_UPDATES = 1;
-
--- More values were not set to NULL after update so we fixed it
--- We use country codes now so it matches the reference data
-
-SET SQL_SAFE_UPDATES = 0;
-
--- Egypt: invalid life expectancy
-UPDATE cleaned_world_bank_data
-SET life_expectancy = NULL
-WHERE country_code = 'EGY'
-  AND year = '2010'
-  AND life_expectancy = '187.4';
-
--- South Africa: invalid CO2 emissions
-UPDATE cleaned_world_bank_data
-SET co2_emissions_per_capita = NULL
-WHERE country_code = 'ZAF'
-  AND year = '2023'
-  AND co2_emissions_per_capita = '-6.5';
-
--- Egypt: invalid electricity access
-UPDATE cleaned_world_bank_data
-SET access_to_electricity_pct = NULL
-WHERE country_code = 'EGY'
-  AND year = '2011'
-  AND access_to_electricity_pct = '101.02';
-
-SET SQL_SAFE_UPDATES = 1;
-
--- Verify for the NULL value UPDATE
-
-WITH missing_values AS (
-
-    SELECT country_name, year, 'region' AS column_name
-    FROM cleaned_world_bank_data
-    WHERE region IS NULL OR TRIM(region) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'income_group'
-    FROM cleaned_world_bank_data
-    WHERE income_group IS NULL OR TRIM(income_group) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'gdp_usd'
-    FROM cleaned_world_bank_data
-    WHERE gdp_usd IS NULL OR TRIM(gdp_usd) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'population'
-    FROM cleaned_world_bank_data
-    WHERE population IS NULL OR TRIM(population) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'life_expectancy'
-    FROM cleaned_world_bank_data
-    WHERE life_expectancy IS NULL OR TRIM(life_expectancy) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'unemployment_rate'
-    FROM cleaned_world_bank_data
-    WHERE unemployment_rate IS NULL OR TRIM(unemployment_rate) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'co2_emissions_per_capita'
-    FROM cleaned_world_bank_data
-    WHERE co2_emissions_per_capita IS NULL
-       OR TRIM(co2_emissions_per_capita) = ''
-
-    UNION ALL
-
-    SELECT country_name, year, 'access_to_electricity_pct'
-    FROM cleaned_world_bank_data
-    WHERE access_to_electricity_pct IS NULL
-       OR TRIM(access_to_electricity_pct) = ''
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
 )
 
-SELECT *
-FROM missing_values
-ORDER BY country_name, year, column_name;
-
--- 
--- CHECK FOR NON-NUMERIC VALUES AND THOSE IN THE WRONG FORMAT
---
-
--- GDP
-SELECT DISTINCT
-    country_name,
-    year,
-    gdp_usd
-FROM cleaned_world_bank_data
-WHERE gdp_usd IS NOT NULL
-  AND TRIM(gdp_usd) <> ''
-  AND (
-       gdp_usd LIKE '%,%'
-       OR gdp_usd LIKE '%$%'
-       OR gdp_usd LIKE '%\%%'
-       OR LOWER(TRIM(gdp_usd)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-  
--- Population
-SELECT DISTINCT
-    country_name,
-    year,
-    population
-FROM cleaned_world_bank_data
-WHERE population IS NOT NULL
-  AND TRIM(population) <> ''
-  AND (
-       population LIKE '%,%'
-       OR population LIKE '%$%'
-       OR population LIKE '%\%%'
-       OR LOWER(TRIM(population)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-
--- Life Expectancy
-SELECT DISTINCT
-    country_name,
-    year,
-    life_expectancy
-FROM cleaned_world_bank_data
-WHERE life_expectancy IS NOT NULL
-  AND TRIM(life_expectancy) <> ''
-  AND (
-       life_expectancy LIKE '%,%'
-       OR life_expectancy LIKE '%$%'
-       OR life_expectancy LIKE '%\%%'
-       OR LOWER(TRIM(life_expectancy)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-
--- Unemployment Rate
-SELECT DISTINCT
-    country_name,
-    year,
-    unemployment_rate
-FROM cleaned_world_bank_data
-WHERE unemployment_rate IS NOT NULL
-  AND TRIM(unemployment_rate) <> ''
-  AND (
-       unemployment_rate LIKE '%,%'
-       OR unemployment_rate LIKE '%$%'
-       OR unemployment_rate LIKE '%\%%'
-       OR LOWER(TRIM(unemployment_rate)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-
--- CO2 Emissions Per Capita
-SELECT DISTINCT
-    country_name,
-    year,
-    co2_emissions_per_capita
-FROM cleaned_world_bank_data
-WHERE co2_emissions_per_capita IS NOT NULL
-  AND TRIM(co2_emissions_per_capita) <> ''
-  AND (
-       co2_emissions_per_capita LIKE '%,%'
-       OR co2_emissions_per_capita LIKE '%$%'
-       OR co2_emissions_per_capita LIKE '%\%%'
-       OR LOWER(TRIM(co2_emissions_per_capita)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-
--- Access to Electricity
-SELECT DISTINCT
-    country_name,
-    year,
-    access_to_electricity_pct
-FROM cleaned_world_bank_data
-WHERE access_to_electricity_pct IS NOT NULL
-  AND TRIM(access_to_electricity_pct) <> ''
-  AND (
-       access_to_electricity_pct LIKE '%,%'
-       OR access_to_electricity_pct LIKE '%$%'
-       OR access_to_electricity_pct LIKE '%\%%'
-       OR LOWER(TRIM(access_to_electricity_pct)) IN ('n/a', 'na', 'unknown', 'null', '..', 'nan')
-  );
-  
---
--- Clean and update the formatting errors
---
-
-SET SQL_SAFE_UPDATES = 0;
-
--- Türkiye 2015: remove $ sign and commas from GDP
-UPDATE cleaned_world_bank_data
-SET gdp_usd = REPLACE(REPLACE(gdp_usd, '$', ''), ',', '')
-WHERE country_name = 'Türkiye'
-  AND year = '2015'
-  AND gdp_usd = '$763,325,006,735';
-
-
--- Canada 2010: "unknown" is not a numeric value
-UPDATE cleaned_world_bank_data
-SET life_expectancy = NULL
-WHERE country_name = 'Canada'
-  AND year = '2010'
-  AND LOWER(TRIM(life_expectancy)) = 'unknown';
-
-
--- India 2021: remove percentage sign
-UPDATE cleaned_world_bank_data
-SET unemployment_rate = REPLACE(unemployment_rate, '%', '')
-WHERE country_name = 'India'
-  AND year = '2021'
-  AND unemployment_rate = '6.14%';
-
-
--- South Africa 2015: change decimal comma to decimal point
-UPDATE cleaned_world_bank_data
-SET co2_emissions_per_capita =
-    REPLACE(co2_emissions_per_capita, ',', '.')
-WHERE country_name = 'South Africa'
-  AND year = '2015'
-  AND co2_emissions_per_capita = '7,86';
-
-
--- Norway 2013: ".." represents a missing value
-UPDATE cleaned_world_bank_data
-SET access_to_electricity_pct = NULL
-WHERE country_name = 'Norway'
-  AND year = '2013'
-  AND access_to_electricity_pct = '..';
-
-SET SQL_SAFE_UPDATES = 1;
-
--- Make all the blank or empty values as NULL
-
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data
-SET
-    country_name = NULLIF(TRIM(country_name), ''),
-    country_code = NULLIF(TRIM(country_code), ''),
-    region = NULLIF(TRIM(region), ''),
-    income_group = NULLIF(TRIM(income_group), ''),
-    year = NULLIF(TRIM(year), ''),
-    gdp_usd = NULLIF(TRIM(gdp_usd), ''),
-    population = NULLIF(TRIM(population), ''),
-    life_expectancy = NULLIF(TRIM(life_expectancy), ''),
-    unemployment_rate = NULLIF(TRIM(unemployment_rate), ''),
-    co2_emissions_per_capita = NULLIF(TRIM(co2_emissions_per_capita), ''),
-    access_to_electricity_pct = NULLIF(TRIM(access_to_electricity_pct), '');
-
-SET SQL_SAFE_UPDATES = 1;
-
--- Verify the update
+-- Decimal comma: 7,86 → 7.86
 SELECT
-    SUM(TRIM(country_name) = '') AS blank_country_name,
-    SUM(TRIM(country_code) = '') AS blank_country_code,
-    SUM(TRIM(region) = '') AS blank_region,
-    SUM(TRIM(income_group) = '') AS blank_income_group,
-    SUM(TRIM(year) = '') AS blank_year,
-    SUM(TRIM(gdp_usd) = '') AS blank_gdp,
-    SUM(TRIM(population) = '') AS blank_population,
-    SUM(TRIM(life_expectancy) = '') AS blank_life_expectancy,
-    SUM(TRIM(unemployment_rate) = '') AS blank_unemployment,
-    SUM(TRIM(co2_emissions_per_capita) = '') AS blank_co2,
-    SUM(TRIM(access_to_electricity_pct) = '') AS blank_electricity
-FROM cleaned_world_bank_data;
+    raw_record_id,
+    'co2_emissions_per_capita',
+    'numeric_format_standardized',
+    co2_emissions_per_capita,
+    REPLACE(BTRIM(co2_emissions_per_capita), ',', '.'),
+    'corrected'
+FROM raw.world_bank_data
+WHERE BTRIM(co2_emissions_per_capita) ~ '^[0-9]+,[0-9]+$'
 
---
--- Remove and handle duplicates (exact and conflicting duplicates)
---
+UNION ALL
 
+-- Percentage sign: 6.14% → 6.14
 SELECT
-    country_name,
-    year,
-    COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data
-GROUP BY country_name, year
-HAVING COUNT(*) > 1;
--- Australia, Korea, Vietnam and India have duplicates
--- Australia and India (exact). Korea and Vietnam (conflicting)
+    raw_record_id,
+    'unemployment_rate',
+    'numeric_format_standardized',
+    unemployment_rate,
+    REPLACE(BTRIM(unemployment_rate), '%', ''),
+    'corrected'
+FROM raw.world_bank_data
+WHERE BTRIM(unemployment_rate) ~ '^[0-9]+([.][0-9]+)?%$'
 
+UNION ALL
 
--- Rebuild table and remove exact duplicates
-CREATE TABLE cleaned_world_bank_data_temp AS
-SELECT DISTINCT *
-FROM cleaned_world_bank_data;
-
--- Verify removal of exact duplicates, you should only see Korea and Vietnam
+-- Currency formatting: remove $ and commas
 SELECT
-    country_name,
-    year,
-    COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data_temp
-GROUP BY country_name, year
-HAVING COUNT(*) > 1;
+    raw_record_id,
+    'gdp_usd',
+    'numeric_format_standardized',
+    gdp_usd,
+    REPLACE(REPLACE(BTRIM(gdp_usd), '$', ''), ',', ''),
+    'corrected'
+FROM raw.world_bank_data
+WHERE BTRIM(gdp_usd) ~ '^[$][0-9,]+([.][0-9]+)?$'
+
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
 
 
--- Replace old cleaned table with the new updated one without the two duplicates
-RENAME TABLE
-    cleaned_world_bank_data TO cleaned_world_bank_data_backup,
-    cleaned_world_bank_data_temp TO cleaned_world_bank_data;
--- Remove the backup table 
-DROP TABLE cleaned_world_bank_data_backup;
--- Exact duplicates were removed.
--- Korea Republic 2000 and Vietnam 2013 contain conflicting values.
--- they are retained for further investigation.
+-- Verify the corrections
+SELECT
+    raw_record_id,
+    column_name,
+    original_value,
+    cleaned_value
+FROM audit.data_quality_log
+WHERE issue_type = 'numeric_format_standardized'
+ORDER BY raw_record_id;
 
 
 -- 
--- UNRESOLVED RECORDS
+-- 7. Log numeric values that must become NULL
 -- 
 
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
 SELECT
-    c.country_name,
-    c.country_code,
-    c.year,
+    r.raw_record_id,
+    v.column_name,
     CASE
-        WHEN CAST(c.year AS UNSIGNED) < 2000
-          OR CAST(c.year AS UNSIGNED) > 2023
-            THEN 'Year outside project scope'
-
-        WHEN r.country_code IS NULL
-            THEN 'Country not found in reference table'
-
-        ELSE 'Review record'
-    END AS issue
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL
-   OR CAST(c.year AS UNSIGNED) < 2000
-   OR CAST(c.year AS UNSIGNED) > 2023
-ORDER BY c.country_name, c.year;
-
--- Country codes and Thailand year format can be fixed
-SET SQL_SAFE_UPDATES = 0;
-
--- Correct country codes using the trusted reference table
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_name = r.country_name
-SET c.country_code = r.country_code
-WHERE c.country_code <> r.country_code;
-
--- Correct Thailand year formatting
-UPDATE cleaned_world_bank_data
-SET year = '2013'
-WHERE country_name = 'Thailand'
-  AND year = 'FY2013';
-
-SET SQL_SAFE_UPDATES = 1;
+        WHEN NULLIF(BTRIM(v.raw_value), '') IS NULL
+            THEN 'missing_numeric_value'
+        ELSE 'invalid_numeric_value'
+    END,
+    v.raw_value,
+    NULL,
+    'set_to_null'
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        ('gdp_usd', r.gdp_usd),
+        ('population', r.population),
+        ('life_expectancy', r.life_expectancy),
+        ('unemployment_rate', r.unemployment_rate),
+        ('co2_emissions_per_capita', r.co2_emissions_per_capita),
+        ('access_to_electricity_pct', r.access_to_electricity_pct)
+) AS v(column_name, raw_value)
+WHERE NULLIF(BTRIM(v.raw_value), '') IS NULL
+   OR (
+        BTRIM(v.raw_value) !~ '^-?[0-9]+([.][0-9]+)?$'
+        AND BTRIM(v.raw_value) !~ '^[0-9]+,[0-9]+$'
+        AND BTRIM(v.raw_value) !~ '^[0-9]+([.][0-9]+)?%$'
+        AND BTRIM(v.raw_value) !~ '^[$][0-9,]+([.][0-9]+)?$'
+   )
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
 
 
--- 
--- QUARANTINE UNRESOLVED RECORDS
--- 
-
-CREATE TABLE quarantined_world_bank_data AS
+-- Verify the results
 SELECT
-    c.*,
+    raw_record_id,
+    column_name,
+    COALESCE(
+        NULLIF(BTRIM(original_value), ''),
+        '[missing]'
+    ) AS original_value,
+    issue_type
+FROM audit.data_quality_log
+WHERE issue_type IN (
+    'missing_numeric_value',
+    'invalid_numeric_value'
+)
+ORDER BY raw_record_id, column_name;
 
-    CASE
-        WHEN c.country_name = 'Kenya'
-             AND c.year = '2024'
-            THEN 'Out-of-scope year and extensively incomplete'
 
-        WHEN CAST(c.year AS UNSIGNED) < 2000
-          OR CAST(c.year AS UNSIGNED) > 2023
-            THEN 'Year outside project scope'
+-- 
+-- 8. Log numeric values outside acceptable ranges
+-- 
 
-        WHEN r.country_code IS NULL
-            THEN 'Country not found in reference table'
-    END AS quarantine_reason
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    r.raw_record_id,
+    v.column_name,
+    'numeric_out_of_range',
+    v.raw_value,
+    NULL,
+    'set_to_null'
+FROM raw.world_bank_data r
+CROSS JOIN LATERAL (
+    VALUES
+        ('gdp_usd', r.gdp_usd, 0::NUMERIC, NULL::NUMERIC),
+        ('population', r.population, 0, NULL),
+        ('life_expectancy', r.life_expectancy, 0, 120),
+        ('unemployment_rate', r.unemployment_rate, 0, 100),
+        ('co2_emissions_per_capita',
+            r.co2_emissions_per_capita, 0, NULL),
+        ('access_to_electricity_pct',
+            r.access_to_electricity_pct, 0, 100)
+) AS v(column_name, raw_value, min_value, max_value)
+WHERE CASE
+    WHEN BTRIM(v.raw_value) ~ '^-?[0-9]+([.][0-9]+)?$'
+    THEN
+        BTRIM(v.raw_value)::NUMERIC < v.min_value
+        OR (
+            v.max_value IS NOT NULL
+            AND BTRIM(v.raw_value)::NUMERIC > v.max_value
+        )
+    ELSE FALSE
+END
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
 
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
 
-WHERE r.country_code IS NULL
-   OR CAST(c.year AS UNSIGNED) < 2000
-   OR CAST(c.year AS UNSIGNED) > 2023;
+-- Verify the results
+SELECT
+    raw_record_id,
+    column_name,
+    original_value
+FROM audit.data_quality_log
+WHERE issue_type = 'numeric_out_of_range'
+ORDER BY raw_record_id;
 
-SHOW TABLES LIKE 'quarantined_world_bank_data';
 
-SELECT 1;
+-- 
+-- 9. Log duplicate records to exclude
+-- Newest source wins; lowest raw ID breaks ties
+-- 
 
-TRUNCATE TABLE quarantined_world_bank_data;
+WITH ranked_records AS (
+    SELECT
+        r.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                UPPER(BTRIM(r.country_code)),
+                BTRIM(r.year)
+            ORDER BY
+                BTRIM(r.source_file) DESC,
+                r.raw_record_id
+        ) AS duplicate_rank
+    FROM raw.world_bank_data r
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM audit.data_quality_log q
+        WHERE q.raw_record_id = r.raw_record_id
+          AND q.action_taken = 'quarantined'
+    )
+)
 
-INSERT INTO quarantined_world_bank_data (
-    country_name,
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    raw_record_id,
+    'row',
+    'duplicate_country_year',
+    CONCAT_WS(
+        ' | ',
+        BTRIM(country_code),
+        BTRIM(year),
+        BTRIM(source_file)
+    ),
+    NULL,
+    'excluded_duplicate'
+FROM ranked_records
+WHERE duplicate_rank > 1
+ON CONFLICT (raw_record_id, column_name, issue_type) DO NOTHING;
+
+
+-- Verify excluded duplicates
+SELECT
+    q.raw_record_id,
+    r.country_code,
+    r.country_name,
+    r.year,
+    r.source_file,
+    q.action_taken
+FROM audit.data_quality_log q
+JOIN raw.world_bank_data r
+    ON r.raw_record_id = q.raw_record_id
+WHERE q.issue_type = 'duplicate_country_year'
+ORDER BY q.raw_record_id;
+
+
+-- 
+-- 10. Create a reusable numeric-cleaning function
+-- 
+
+CREATE OR REPLACE FUNCTION staging.clean_numeric(
+    raw_value TEXT,
+    min_value NUMERIC DEFAULT NULL,
+    max_value NUMERIC DEFAULT NULL
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    cleaned_value TEXT := BTRIM(raw_value);
+    numeric_value NUMERIC;
+BEGIN
+    IF cleaned_value IS NULL OR cleaned_value = '' THEN
+        RETURN NULL;
+    END IF;
+
+    -- Remove supported formatting
+    IF LEFT(cleaned_value, 1) = '$' THEN
+        cleaned_value :=
+            REPLACE(REPLACE(cleaned_value, '$', ''), ',', '');
+    ELSIF RIGHT(cleaned_value, 1) = '%' THEN
+        cleaned_value := REPLACE(cleaned_value, '%', '');
+    ELSIF cleaned_value ~ '^-?[0-9]+,[0-9]+$' THEN
+        cleaned_value := REPLACE(cleaned_value, ',', '.');
+    END IF;
+
+    -- Reject remaining text values
+    IF cleaned_value !~ '^-?[0-9]+([.][0-9]+)?$' THEN
+        RETURN NULL;
+    END IF;
+
+    numeric_value := cleaned_value::NUMERIC;
+
+    -- Reject values outside the allowed range
+    IF (min_value IS NOT NULL AND numeric_value < min_value)
+       OR (max_value IS NOT NULL AND numeric_value > max_value)
+    THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN numeric_value;
+END;
+$$;
+
+
+-- Test the function
+SELECT
+    staging.clean_numeric('7,86', 0, NULL) AS decimal_comma,
+    staging.clean_numeric('6.14%', 0, 100) AS percentage,
+    staging.clean_numeric('$1,234.50', 0, NULL) AS currency,
+    staging.clean_numeric('unknown', 0, 120) AS invalid_text,
+    staging.clean_numeric('652.0', 0, 100) AS out_of_range;
+
+
+-- 
+-- 11. Load the cleaned staging table
+-- 
+
+BEGIN;
+
+TRUNCATE TABLE staging.world_bank_data_clean;
+
+INSERT INTO staging.world_bank_data_clean (
+    raw_record_id,
     country_code,
+    country_name,
     region,
     income_group,
     year,
@@ -646,171 +591,79 @@ INSERT INTO quarantined_world_bank_data (
     access_to_electricity_pct,
     source_file,
     ingested_at,
-    quarantine_reason
+    pipeline_loaded_at
 )
 SELECT
-    c.country_name,
+    r.raw_record_id,
     c.country_code,
+    c.country_name,
     c.region,
     c.income_group,
-    c.year,
-    c.gdp_usd,
-    c.population,
-    c.life_expectancy,
-    c.unemployment_rate,
-    c.co2_emissions_per_capita,
-    c.access_to_electricity_pct,
-    c.source_file,
-    c.ingested_at,
+    COALESCE(year_fix.cleaned_value, BTRIM(r.year))::SMALLINT,
+    staging.clean_numeric(r.gdp_usd, 0),
+    staging.clean_numeric(r.population, 0)::BIGINT,
+    staging.clean_numeric(r.life_expectancy, 0, 120),
+    staging.clean_numeric(r.unemployment_rate, 0, 100),
+    staging.clean_numeric(r.co2_emissions_per_capita, 0),
+    staging.clean_numeric(r.access_to_electricity_pct, 0, 100),
+    BTRIM(r.source_file),
+    BTRIM(r.ingested_at)::TIMESTAMP,
+    r.pipeline_loaded_at
+FROM raw.world_bank_data r
+LEFT JOIN audit.data_quality_log code_fix
+    ON code_fix.raw_record_id = r.raw_record_id
+   AND code_fix.issue_type = 'country_code_standardized'
+LEFT JOIN audit.data_quality_log year_fix
+    ON year_fix.raw_record_id = r.raw_record_id
+   AND year_fix.issue_type = 'year_format_standardized'
+JOIN reference.country_reference c
+    ON c.country_code = COALESCE(
+        code_fix.cleaned_value,
+        UPPER(BTRIM(r.country_code))
+    )
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM audit.data_quality_log excluded
+    WHERE excluded.raw_record_id = r.raw_record_id
+      AND excluded.action_taken IN (
+          'quarantined',
+          'excluded_duplicate'
+      )
+);
 
-    CASE
-        WHEN c.country_name = 'Kenya'
-             AND CAST(c.year AS DECIMAL(10,1)) = 2024
-            THEN 'Out-of-scope year and extensively incomplete'
+COMMIT;
 
-        WHEN CAST(c.year AS DECIMAL(10,1)) < 2000
-          OR CAST(c.year AS DECIMAL(10,1)) > 2023
-            THEN 'Year outside project scope'
-
-        WHEN r.country_code IS NULL
-            THEN 'Country not found in reference table'
-
-        ELSE 'Review record'
-    END
-
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-
-WHERE r.country_code IS NULL
-   OR CAST(c.year AS DECIMAL(10,1)) < 2000
-   OR CAST(c.year AS DECIMAL(10,1)) > 2023;
-   
-SELECT COUNT(*) AS quarantined_rows
-FROM quarantined_world_bank_data;
-
+-- Verify the load
 SELECT
-    country_name,
+    COUNT(*) AS cleaned_row_count,
+    COUNT(DISTINCT (country_code, year)) AS unique_country_years
+FROM staging.world_bank_data_clean;
+
+
+-- 
+-- 12. Final cleaning verification
+-- 
+
+-- Confirm that all raw records are accounted for
+SELECT
+    (SELECT COUNT(*) FROM raw.world_bank_data) AS raw_rows,
+    (SELECT COUNT(*) FROM staging.world_bank_data_clean) AS cleaned_rows,
+    (
+        SELECT COUNT(DISTINCT raw_record_id)
+        FROM audit.data_quality_log
+        WHERE action_taken = 'quarantined'
+    ) AS quarantined_rows,
+    (
+        SELECT COUNT(DISTINCT raw_record_id)
+        FROM audit.data_quality_log
+        WHERE action_taken = 'excluded_duplicate'
+    ) AS excluded_duplicates;
+
+    -- Confirm no duplicates remain
+    SELECT
     country_code,
     year,
-    quarantine_reason
-FROM quarantined_world_bank_data
-ORDER BY country_name, year;
-
-SET SQL_SAFE_UPDATES = 0;
-
-DELETE c
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL
-   OR CAST(c.year AS DECIMAL(10,1)) < 2000
-   OR CAST(c.year AS DECIMAL(10,1)) > 2023;
-
-SET SQL_SAFE_UPDATES = 1;
-
-SELECT
-    c.country_name,
-    c.country_code,
-    c.year
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL
-   OR CAST(c.year AS DECIMAL(10,1)) < 2000
-   OR CAST(c.year AS DECIMAL(10,1)) > 2023;
-   
-SELECT COUNT(*) AS quarantined_rows
-FROM quarantined_world_bank_data;
-
-SELECT DISTINCT year
-FROM cleaned_world_bank_data
-WHERE year LIKE '%.%';
-
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data
-SET year = '2005'
-WHERE year = '2005.0';
-
-SET SQL_SAFE_UPDATES = 1;
-
-SELECT DISTINCT year
-FROM cleaned_world_bank_data
-WHERE year LIKE '%.%';
-
-
--- 
--- DATA CLEANING CHECKS AND VERIFICATION
--- 
-
--- 1. Final row count
-SELECT COUNT(*) AS cleaned_rows
-FROM cleaned_world_bank_data;
-
--- 2. Check remaining NULL values
-SELECT
-    SUM(country_name IS NULL) AS null_country_name,
-    SUM(country_code IS NULL) AS null_country_code,
-    SUM(region IS NULL) AS null_region,
-    SUM(income_group IS NULL) AS null_income_group,
-    SUM(year IS NULL) AS null_year,
-    SUM(gdp_usd IS NULL) AS null_gdp,
-    SUM(population IS NULL) AS null_population,
-    SUM(life_expectancy IS NULL) AS null_life_expectancy,
-    SUM(unemployment_rate IS NULL) AS null_unemployment,
-    SUM(co2_emissions_per_capita IS NULL) AS null_co2,
-    SUM(access_to_electricity_pct IS NULL) AS null_electricity
-FROM cleaned_world_bank_data;
-
--- 3. Check for remaining impossible numeric values
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(life_expectancy AS DECIMAL(10,2)) > 120
-   OR CAST(life_expectancy AS DECIMAL(10,2)) < 0
-   OR CAST(unemployment_rate AS DECIMAL(10,2)) > 100
-   OR CAST(unemployment_rate AS DECIMAL(10,2)) < 0
-   OR CAST(co2_emissions_per_capita AS DECIMAL(10,2)) < 0
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) > 100
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) < 0;
-   
--- 4. Check that every country belongs to the trusted reference table
-SELECT DISTINCT
-    c.country_name,
-    c.country_code
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL;
-
--- 5. Check year range
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(year AS DECIMAL(10,1)) < 2000
-   OR CAST(year AS DECIMAL(10,1)) > 2023;
-   
--- 6. Check remaining duplicate country-year records
-SELECT
-    country_name,
-    year,
     COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data
-GROUP BY country_name, year
+FROM staging.world_bank_data_clean
+GROUP BY country_code, year
 HAVING COUNT(*) > 1;
-
--- 7. Verify quarantine table
-SELECT COUNT(*) AS quarantined_rows
-FROM quarantined_world_bank_data;
-
-
--- Data cleaning completed:
--- - Standardised country information using reference data
--- - Corrected country code errors
--- - Standardised blank values to NULL
--- - Replaced impossible values with NULL
--- - Cleaned badly formatted numeric values
--- - Removed exact duplicate records
--- - Retained conflicting duplicates for further investigation
--- - Standardised year formatting
--- - Quarantined 7 out-of-scope/unusable records
--- - Final cleaning checks completed
