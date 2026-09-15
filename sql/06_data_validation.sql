@@ -1,233 +1,169 @@
-USE world_bank_project;
-
--- 
--- DATA VALIDATION
--- 
-
--- Raw dataset row count
-SELECT COUNT(*) AS raw_rows
-FROM raw_world_bank_data;
-
--- Cleaned dataset row count
-SELECT COUNT(*) AS cleaned_rows
-FROM cleaned_world_bank_data;
-
--- Quarantined dataset row count
-SELECT COUNT(*) AS quarantined_rows
-FROM quarantined_world_bank_data;
+-- World Bank SQL Data Pipeline
+-- PostgreSQL data validation
+-- This file verifies the cleaned staging data without changing it.
 
 
 -- 
--- VALIDATE MISSING VALUES
+-- 1. Validate row-count reconciliation
+-- 
+
+WITH row_counts AS (
+    SELECT
+        (SELECT COUNT(*) FROM raw.world_bank_data) AS raw_rows,
+        (SELECT COUNT(*) FROM staging.world_bank_data_clean) AS cleaned_rows,
+        (
+            SELECT COUNT(DISTINCT raw_record_id)
+            FROM audit.data_quality_log
+            WHERE action_taken = 'quarantined'
+        ) AS quarantined_rows,
+        (
+            SELECT COUNT(DISTINCT raw_record_id)
+            FROM audit.data_quality_log
+            WHERE action_taken = 'excluded_duplicate'
+        ) AS excluded_duplicates
+)
+SELECT
+    *,
+    raw_rows = cleaned_rows
+             + quarantined_rows
+             + excluded_duplicates AS passed
+FROM row_counts;
+
+
+-- 
+-- 2. Validate country reference data
 -- 
 
 SELECT
-    SUM(country_name IS NULL) AS null_country_name,
-    SUM(country_code IS NULL) AS null_country_code,
-    SUM(region IS NULL) AS null_region,
-    SUM(income_group IS NULL) AS null_income_group,
-    SUM(year IS NULL) AS null_year,
-    SUM(gdp_usd IS NULL) AS null_gdp,
-    SUM(population IS NULL) AS null_population,
-    SUM(life_expectancy IS NULL) AS null_life_expectancy,
-    SUM(unemployment_rate IS NULL) AS null_unemployment,
-    SUM(co2_emissions_per_capita IS NULL) AS null_co2,
-    SUM(access_to_electricity_pct IS NULL) AS null_electricity
-FROM cleaned_world_bank_data;
--- The remaining NULL values are there because I kept missing or invalid measurements
+    s.raw_record_id,
+    s.country_code,
+    s.country_name,
+    s.region,
+    s.income_group
+FROM staging.world_bank_data_clean s
+LEFT JOIN reference.country_reference c
+    ON s.country_code = c.country_code
+WHERE c.country_code IS NULL
+   OR s.country_name IS DISTINCT FROM c.country_name
+   OR s.region IS DISTINCT FROM c.region
+   OR s.income_group IS DISTINCT FROM c.income_group
+ORDER BY s.raw_record_id;
 
--- Confirm there are no blank strings left
+
+-- 
+-- 3. Validate year and numeric ranges
+-- 
+
 SELECT
-    SUM(TRIM(country_name) = '') AS blank_country_name,
-    SUM(TRIM(country_code) = '') AS blank_country_code,
-    SUM(TRIM(region) = '') AS blank_region,
-    SUM(TRIM(income_group) = '') AS blank_income_group,
-    SUM(TRIM(year) = '') AS blank_year,
-    SUM(TRIM(gdp_usd) = '') AS blank_gdp,
-    SUM(TRIM(population) = '') AS blank_population,
-    SUM(TRIM(life_expectancy) = '') AS blank_life_expectancy,
-    SUM(TRIM(unemployment_rate) = '') AS blank_unemployment,
-    SUM(TRIM(co2_emissions_per_capita) = '') AS blank_co2,
-    SUM(TRIM(access_to_electricity_pct) = '') AS blank_electricity
-FROM cleaned_world_bank_data;
-
--- 
--- VALIDATE NUMERIC RANGES
--- 
-
--- Check year range
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(year AS DECIMAL(10,1)) < 2000
-   OR CAST(year AS DECIMAL(10,1)) > 2023;
-
-
--- Check negative GDP
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(gdp_usd AS DECIMAL(30,2)) < 0;
-
-
--- Check negative population
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(population AS DECIMAL(30,2)) < 0;
-
-
--- Check life expectancy
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(life_expectancy AS DECIMAL(10,2)) < 0
-   OR CAST(life_expectancy AS DECIMAL(10,2)) > 120;
-
-
--- Check unemployment rate
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(unemployment_rate AS DECIMAL(10,2)) < 0
-   OR CAST(unemployment_rate AS DECIMAL(10,2)) > 100;
-
-
--- Check CO2 emissions
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(co2_emissions_per_capita AS DECIMAL(10,2)) < 0;
-
-
--- Check access to electricity
-SELECT *
-FROM cleaned_world_bank_data
-WHERE CAST(access_to_electricity_pct AS DECIMAL(10,2)) < 0
-   OR CAST(access_to_electricity_pct AS DECIMAL(10,2)) > 100;
-
-
--- 
--- VALIDATE COUNTRY REFERENCE CONSISTENCY
--- 
-
--- Check country codes that do not exist in the reference table
-SELECT DISTINCT
-    c.country_name,
-    c.country_code
-FROM cleaned_world_bank_data c
-LEFT JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE r.country_code IS NULL;
-
--- Check that country name matches the code
-SELECT DISTINCT
-    c.country_name AS cleaned_country_name,
-    c.country_code,
-    r.country_name AS expected_country_name
-FROM cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-WHERE c.country_name <> r.country_name;
--- Turkiye has a wrong country name so we have to update it
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-SET c.country_name = r.country_name
-WHERE c.country_code = 'TUR'
-  AND c.country_name <> r.country_name;
-
-SET SQL_SAFE_UPDATES = 1;
--- Verify the name update
-SELECT country_name, country_code
-FROM cleaned_world_bank_data
-WHERE country_code = 'TUR';
-
--- Fix remaining name mismatches (Korea, Russian Federation, United Kingdom and United States)
-SET SQL_SAFE_UPDATES = 0;
-
-UPDATE cleaned_world_bank_data c
-JOIN country_reference r
-    ON c.country_code = r.country_code
-SET c.country_name = r.country_name
-WHERE c.country_name <> r.country_name;
-
-SET SQL_SAFE_UPDATES = 1;
-
-
--- 
--- SECTION 5: VALIDATE DUPLICATES
--- 
-
--- Check for exact duplicate rows
-SELECT
-    country_name,
+    raw_record_id,
     country_code,
-    region,
-    income_group,
     year,
     gdp_usd,
     population,
     life_expectancy,
     unemployment_rate,
     co2_emissions_per_capita,
-    access_to_electricity_pct,
-    source_file,
-    ingested_at,
-    COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data
-GROUP BY
-    country_name,
+    access_to_electricity_pct
+FROM staging.world_bank_data_clean
+WHERE year NOT BETWEEN 2000 AND 2023
+   OR gdp_usd < 0
+   OR population < 0
+   OR life_expectancy NOT BETWEEN 0 AND 120
+   OR unemployment_rate NOT BETWEEN 0 AND 100
+   OR co2_emissions_per_capita < 0
+   OR access_to_electricity_pct NOT BETWEEN 0 AND 100
+ORDER BY raw_record_id;
+
+
+-- 
+-- 4. Validate required fields
+-- 
+
+SELECT
+    raw_record_id,
     country_code,
+    country_name,
     region,
     income_group,
     year,
-    gdp_usd,
-    population,
-    life_expectancy,
-    unemployment_rate,
-    co2_emissions_per_capita,
-    access_to_electricity_pct,
-    source_file,
-    ingested_at
-HAVING COUNT(*) > 1;
-
--- Check remaining country-year duplicates
-SELECT
-    country_name,
-    year,
-    COUNT(*) AS duplicate_count
-FROM cleaned_world_bank_data
-GROUP BY country_name, year
-HAVING COUNT(*) > 1;
--- We expect Korea and Vietnam to appear.
+    source_file
+FROM staging.world_bank_data_clean
+WHERE raw_record_id IS NULL
+   OR NULLIF(BTRIM(country_code), '') IS NULL
+   OR NULLIF(BTRIM(country_name), '') IS NULL
+   OR NULLIF(BTRIM(region), '') IS NULL
+   OR NULLIF(BTRIM(income_group), '') IS NULL
+   OR year IS NULL
+   OR NULLIF(BTRIM(source_file), '') IS NULL
+   OR ingested_at IS NULL
+   OR pipeline_loaded_at IS NULL;
 
 
 -- 
--- FINAL DATASET READINESS CHECK
+-- 5. Validate unique records
 -- 
 
 SELECT
-    COUNT(*) AS total_cleaned_rows,
-    COUNT(DISTINCT country_code) AS total_countries,
-    MIN(CAST(year AS UNSIGNED)) AS earliest_year,
-    MAX(CAST(year AS UNSIGNED)) AS latest_year
-FROM cleaned_world_bank_data;
-
--- Confirm quarantine
-SELECT COUNT(*) AS quarantined_rows
-FROM quarantined_world_bank_data;
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT raw_record_id) AS unique_record_ids,
+    COUNT(DISTINCT (country_code, year)) AS unique_country_years,
+    COUNT(*) = COUNT(DISTINCT raw_record_id)
+    AND COUNT(*) = COUNT(DISTINCT (country_code, year)) AS passed
+FROM staging.world_bank_data_clean;
 
 
 -- 
--- PHASE 5 SUMMARY
+-- 6. Confirm excluded records are absent from staging
 -- 
 
--- Data validation completed:
--- - Confirmed raw, cleaned and quarantine row counts
--- - Validated remaining NULL values
--- - Confirmed no blank strings remain
--- - Validated numeric ranges
--- - Validated year range
--- - Confirmed country codes match the reference table
--- - Fixed remaining country-name inconsistencies
--- - Confirmed region and income-group consistency
--- - Confirmed no exact duplicate rows remain
--- - Verified known conflicting duplicates are retained
--- - Confirmed cleaned dataset is ready for transformation
+SELECT
+    s.raw_record_id,
+    s.country_code,
+    s.year,
+    a.issue_type,
+    a.action_taken
+FROM staging.world_bank_data_clean s
+JOIN audit.data_quality_log a
+    ON s.raw_record_id = a.raw_record_id
+WHERE a.action_taken IN (
+    'quarantined',
+    'excluded_duplicate'
+)
+ORDER BY s.raw_record_id;
+
+
+-- 
+-- 7. Validate PostgreSQL data types
+-- 
+
+SELECT
+    PG_TYPEOF(raw_record_id) AS record_id_type,
+    PG_TYPEOF(year) AS year_type,
+    PG_TYPEOF(gdp_usd) AS gdp_type,
+    PG_TYPEOF(population) AS population_type,
+    PG_TYPEOF(life_expectancy) AS life_expectancy_type,
+    PG_TYPEOF(unemployment_rate) AS unemployment_type,
+    PG_TYPEOF(co2_emissions_per_capita) AS co2_type,
+    PG_TYPEOF(access_to_electricity_pct) AS electricity_type
+FROM staging.world_bank_data_clean
+LIMIT 1;
+
+
+-- 
+-- 8. Summarize retained NULL indicator values
+-- 
+
+SELECT
+    COUNT(*) FILTER (WHERE gdp_usd IS NULL) AS gdp_nulls,
+    COUNT(*) FILTER (WHERE population IS NULL) AS population_nulls,
+    COUNT(*) FILTER (WHERE life_expectancy IS NULL) AS life_expectancy_nulls,
+    COUNT(*) FILTER (WHERE unemployment_rate IS NULL) AS unemployment_nulls,
+    COUNT(*) FILTER (
+        WHERE co2_emissions_per_capita IS NULL
+    ) AS co2_nulls,
+    COUNT(*) FILTER (
+        WHERE access_to_electricity_pct IS NULL
+    ) AS electricity_nulls
+FROM staging.world_bank_data_clean;
+
+
