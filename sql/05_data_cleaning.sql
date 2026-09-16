@@ -568,11 +568,39 @@ SELECT
     staging.clean_numeric('652.0', 0, 100) AS out_of_range;
 
 
--- 
--- 11. Load the cleaned staging table
--- 
+--
+-- 11. Log the Korea population correction
+--
 
 BEGIN;
+
+INSERT INTO audit.data_quality_log (
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+)
+SELECT
+    raw_record_id,
+    'population',
+    'population_scale_corrected',
+    BTRIM(population),
+    '51484000',
+    'corrected'
+FROM raw.world_bank_data
+WHERE raw_record_id = 159
+ON CONFLICT (raw_record_id, column_name, issue_type)
+DO UPDATE SET
+    original_value = EXCLUDED.original_value,
+    cleaned_value = EXCLUDED.cleaned_value,
+    action_taken = EXCLUDED.action_taken;
+
+
+-- 
+-- 12. Load the cleaned staging table
+-- 
 
 TRUNCATE TABLE staging.world_bank_data_clean;
 
@@ -599,9 +627,15 @@ SELECT
     c.country_name,
     c.region,
     c.income_group,
-    COALESCE(year_fix.cleaned_value, BTRIM(r.year))::SMALLINT,
+    COALESCE(
+        year_fix.cleaned_value,
+        BTRIM(r.year)
+    )::SMALLINT,
     staging.clean_numeric(r.gdp_usd, 0),
-    staging.clean_numeric(r.population, 0)::BIGINT,
+    staging.clean_numeric(
+        COALESCE(population_fix.cleaned_value, r.population),
+        0
+    )::BIGINT,
     staging.clean_numeric(r.life_expectancy, 0, 120),
     staging.clean_numeric(r.unemployment_rate, 0, 100),
     staging.clean_numeric(r.co2_emissions_per_capita, 0),
@@ -610,17 +644,25 @@ SELECT
     BTRIM(r.ingested_at)::TIMESTAMP,
     r.pipeline_loaded_at
 FROM raw.world_bank_data r
+
 LEFT JOIN audit.data_quality_log code_fix
     ON code_fix.raw_record_id = r.raw_record_id
    AND code_fix.issue_type = 'country_code_standardized'
+
 LEFT JOIN audit.data_quality_log year_fix
     ON year_fix.raw_record_id = r.raw_record_id
    AND year_fix.issue_type = 'year_format_standardized'
+
+LEFT JOIN audit.data_quality_log population_fix
+    ON population_fix.raw_record_id = r.raw_record_id
+   AND population_fix.issue_type = 'population_scale_corrected'
+
 JOIN reference.country_reference c
     ON c.country_code = COALESCE(
         code_fix.cleaned_value,
         UPPER(BTRIM(r.country_code))
     )
+
 WHERE NOT EXISTS (
     SELECT 1
     FROM audit.data_quality_log excluded
@@ -633,21 +675,52 @@ WHERE NOT EXISTS (
 
 COMMIT;
 
--- Verify the load
+
+-- Verify the staging load
 SELECT
     COUNT(*) AS cleaned_row_count,
     COUNT(DISTINCT (country_code, year)) AS unique_country_years
 FROM staging.world_bank_data_clean;
 
 
+-- Verify the Korea population correction
+SELECT
+    raw_record_id,
+    country_code,
+    country_name,
+    year,
+    population,
+    ROUND(
+        gdp_usd / NULLIF(population, 0),
+        2
+    ) AS gdp_per_capita
+FROM staging.world_bank_data_clean
+WHERE country_code = 'KOR'
+  AND year = 2018;
+
+
+-- Verify the audit entry
+SELECT
+    raw_record_id,
+    column_name,
+    issue_type,
+    original_value,
+    cleaned_value,
+    action_taken
+FROM audit.data_quality_log
+WHERE issue_type = 'population_scale_corrected';
+
+
 -- 
--- 12. Final cleaning verification
+-- 13. Final cleaning verification
 -- 
 
--- Confirm that all raw records are accounted for
 SELECT
     (SELECT COUNT(*) FROM raw.world_bank_data) AS raw_rows,
-    (SELECT COUNT(*) FROM staging.world_bank_data_clean) AS cleaned_rows,
+    (
+        SELECT COUNT(*)
+        FROM staging.world_bank_data_clean
+    ) AS cleaned_rows,
     (
         SELECT COUNT(DISTINCT raw_record_id)
         FROM audit.data_quality_log
@@ -659,8 +732,9 @@ SELECT
         WHERE action_taken = 'excluded_duplicate'
     ) AS excluded_duplicates;
 
-    -- Confirm no duplicates remain
-    SELECT
+
+-- Confirm that no duplicates remain
+SELECT
     country_code,
     year,
     COUNT(*) AS duplicate_count
