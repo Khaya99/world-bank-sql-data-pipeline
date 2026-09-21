@@ -167,3 +167,37 @@ SELECT
 FROM staging.world_bank_data_clean;
 
 
+
+
+-- 9. Verify the documented Brazil and Mexico corrections
+-- Both rows must return passed = true; raw values remain unchanged.
+WITH expected(country_code, year, column_name, issue_type, raw_value, clean_value) AS (
+    VALUES
+        ('BRA', 2022, 'life_expectancy', 'life_expectancy_decimal_corrected',
+         '7.5', 75.0::NUMERIC),
+        ('MEX', 2023, 'gdp_usd', 'gdp_unit_corrected',
+         '1815091.26', 1815091260000.00::NUMERIC)
+)
+SELECT
+    e.country_code, e.year, e.column_name,
+    CASE e.column_name WHEN 'life_expectancy' THEN r.life_expectancy
+        ELSE r.gdp_usd END AS raw_value,
+    CASE e.column_name WHEN 'life_expectancy' THEN s.life_expectancy
+        ELSE s.gdp_usd END AS cleaned_value,
+    COALESCE(
+        BTRIM(CASE e.column_name WHEN 'life_expectancy' THEN r.life_expectancy
+            ELSE r.gdp_usd END) = e.raw_value
+        AND CASE e.column_name WHEN 'life_expectancy' THEN s.life_expectancy
+            ELSE s.gdp_usd END = e.clean_value
+        AND a.original_value = e.raw_value
+        AND (CASE WHEN a.cleaned_value ~ '^-?[0-9]+([.][0-9]+)?$' THEN a.cleaned_value::NUMERIC END) = e.clean_value
+        AND a.action_taken = 'corrected', FALSE
+    ) AS passed
+FROM expected e
+LEFT JOIN staging.world_bank_data_clean s
+    ON s.country_code = e.country_code AND s.year = e.year
+LEFT JOIN raw.world_bank_data r ON r.raw_record_id = s.raw_record_id
+LEFT JOIN audit.data_quality_log a
+    ON a.raw_record_id = s.raw_record_id
+   AND a.column_name = e.column_name AND a.issue_type = e.issue_type
+ORDER BY e.country_code;

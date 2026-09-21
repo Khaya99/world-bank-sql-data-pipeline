@@ -598,6 +598,38 @@ DO UPDATE SET
     action_taken = EXCLUDED.action_taken;
 
 
+-- Correct the two documented source defects without changing raw values.
+-- BRA-2022: the generator divided life expectancy by 10.
+-- MEX-2023: GDP is expressed in millions of USD, rounded to two decimals.
+-- Source: docs/dirt_manifest.csv and scripts/generate_dataset.py.
+INSERT INTO audit.data_quality_log (
+    raw_record_id, column_name, issue_type,
+    original_value, cleaned_value, action_taken
+)
+SELECT
+    r.raw_record_id, fix.column_name, fix.issue_type,
+    fix.original_value, fix.cleaned_value, 'corrected'
+FROM raw.world_bank_data r
+JOIN (
+    VALUES
+        ('BRA', '2022', 'life_expectancy', 'life_expectancy_decimal_corrected',
+         '7.5', '75.0'),
+        ('MEX', '2023', 'gdp_usd', 'gdp_unit_corrected',
+         '1815091.26', '1815091260000.00')
+) AS fix(country_code, year, column_name, issue_type, original_value, cleaned_value)
+    ON UPPER(BTRIM(r.country_code)) = fix.country_code
+   AND BTRIM(r.year) = fix.year
+   AND BTRIM(CASE fix.column_name
+       WHEN 'life_expectancy' THEN r.life_expectancy
+       WHEN 'gdp_usd' THEN r.gdp_usd
+   END) = fix.original_value
+ON CONFLICT (raw_record_id, column_name, issue_type)
+DO UPDATE SET
+    original_value = EXCLUDED.original_value,
+    cleaned_value = EXCLUDED.cleaned_value,
+    action_taken = EXCLUDED.action_taken;
+
+
 -- 
 -- 12. Load the cleaned staging table
 -- 
@@ -631,12 +663,14 @@ SELECT
         year_fix.cleaned_value,
         BTRIM(r.year)
     )::SMALLINT,
-    staging.clean_numeric(r.gdp_usd, 0),
+    staging.clean_numeric(COALESCE(gdp_fix.cleaned_value, r.gdp_usd), 0),
     staging.clean_numeric(
         COALESCE(population_fix.cleaned_value, r.population),
         0
     )::BIGINT,
-    staging.clean_numeric(r.life_expectancy, 0, 120),
+    staging.clean_numeric(
+        COALESCE(life_expectancy_fix.cleaned_value, r.life_expectancy), 0, 120
+    ),
     staging.clean_numeric(r.unemployment_rate, 0, 100),
     staging.clean_numeric(r.co2_emissions_per_capita, 0),
     staging.clean_numeric(r.access_to_electricity_pct, 0, 100),
@@ -656,6 +690,16 @@ LEFT JOIN audit.data_quality_log year_fix
 LEFT JOIN audit.data_quality_log population_fix
     ON population_fix.raw_record_id = r.raw_record_id
    AND population_fix.issue_type = 'population_scale_corrected'
+
+LEFT JOIN audit.data_quality_log gdp_fix
+    ON gdp_fix.raw_record_id = r.raw_record_id
+   AND gdp_fix.column_name = 'gdp_usd'
+   AND gdp_fix.issue_type = 'gdp_unit_corrected'
+
+LEFT JOIN audit.data_quality_log life_expectancy_fix
+    ON life_expectancy_fix.raw_record_id = r.raw_record_id
+   AND life_expectancy_fix.column_name = 'life_expectancy'
+   AND life_expectancy_fix.issue_type = 'life_expectancy_decimal_corrected'
 
 JOIN reference.country_reference c
     ON c.country_code = COALESCE(

@@ -63,11 +63,15 @@ The raw table has 729 records. After cleaning, there are 718 unique country-year
 
 I corrected a population error for Korea, Rep. in 2018 and recorded the change in an audit log. The raw value was kept in the raw table.
 
+Brazil 2022 life expectancy is corrected from 7.5 to 75.0 years, and Mexico 2023 GDP is converted from millions of USD to USD. The raw data remains unchanged. Details and verification are in [Brazil and Mexico corrections](docs/brazil_mexico_corrections.md).
+
 ## Key Findings
 
-- Electricity access and life expectancy had a positive correlation of 0.740.
+The figures below were verified in a separate PostgreSQL rebuild using the corrected scripts. Apply `sql/maintenance/fix_brazil_mexico.sql` in the existing database and rerun validation and analysis to bring that database up to date.
+
+- Electricity access and life expectancy had a positive correlation of 0.780.
 - Countries with larger increases in electricity access from 2000 to 2023 generally had larger increases in life expectancy. The correlation was 0.737.
-- GDP per capita and life expectancy had a positive correlation of 0.676 across the dataset.
+- GDP per capita and life expectancy had a positive correlation of 0.702 across the dataset.
 - Population had weak correlations with CO₂ emissions per capita, unemployment and electricity access.
 
 These are relationships in the synthetic data. They do not prove that one indicator caused a change in another. The conflicting Korea, Rep. 2000 duplicate also affects how its change from 2000 to 2023 should be interpreted.
