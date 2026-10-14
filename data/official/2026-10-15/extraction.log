@@ -1,0 +1,31 @@
+Failed to find real location of C:\Program Files\Python313\python.exe
+C:\Users\mpume\Downloads\world-bank-sql-data-pipeline\scripts\fetch_worldbank.py:141: Pandas4Warning: Timestamp.utcnow is deprecated and will be removed in a future version. Use Timestamp.now('UTC') instead.
+  rec["ingested_at"] = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+gdp_usd                      <- NY.GDP.MKTP.CD  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+population                   <- SP.POP.TOTL  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+life_expectancy              <- SP.DYN.LE00.IN  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+unemployment_rate            <- SL.UEM.TOTL.ZS  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+co2_emissions_per_capita     <- EN.GHG.CO2.PC.CE.AR5  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+access_to_electricity_pct    <- EG.ELC.ACCS.ZS  (720 observations)
+  Coverage: expected=720, available=720, missing=0, unexpected=0
+
+wrote outputs/world_bank_official_2000_2023.csv  (720 rows)
+null rate per column:
+country_name                 0.0
+country_code                 0.0
+region                       0.0
+income_group                 0.0
+year                         0.0
+gdp_usd                      0.0
+population                   0.0
+life_expectancy              0.0
+unemployment_rate            0.0
+co2_emissions_per_capita     0.0
+access_to_electricity_pct    0.0
+source_file                  0.0
+ingested_at                  0.0

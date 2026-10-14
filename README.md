@@ -16,7 +16,7 @@ The dataset covers 30 countries from 2000 to 2023. It includes GDP, population, 
 
 This is a synthetic dataset made to resemble World Bank data. It includes missing values, duplicates, incorrect formats and inconsistent country information. The results are not official World Bank findings.
 
-I also included a Python script that can retrieve similar indicators from the World Bank API for future work with real data.
+The Python API extractor now includes retries and completeness reporting. A separate official-data snapshot contains 720 country-year rows for 2000–2023; it has not yet been loaded into PostgreSQL or used for the findings below. See [API extraction progress and reproduction steps](docs/api_extraction_progress.md).
 
 ## Project Workflow
 

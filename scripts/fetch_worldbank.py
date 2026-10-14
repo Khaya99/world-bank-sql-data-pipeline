@@ -20,6 +20,8 @@ import time
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 BASE = "https://api.worldbank.org/v2"
 
@@ -37,17 +39,31 @@ INDICATORS = {
 }
 
 
+def get_json(url, params):
+    """Read JSON, retrying temporary GET failures up to three times."""
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods={"GET"},
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    with requests.Session() as session:
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        response = session.get(url, params=params, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
+
 def fetch(indicator, start, end):
     """Return {(iso3, year): value} for one indicator, following pagination."""
     out, page = {}, 1
     while True:
-        r = requests.get(
+        payload = get_json(
             f"{BASE}/country/{';'.join(COUNTRIES)}/indicator/{indicator}",
             params={"format": "json", "per_page": 1000, "date": f"{start}:{end}", "page": page},
-            timeout=60,
         )
-        r.raise_for_status()
-        payload = r.json()
         if not isinstance(payload, list) or len(payload) < 2 or payload[1] is None:
             break
         meta, rows = payload[0], payload[1]
@@ -62,16 +78,32 @@ def fetch(indicator, start, end):
     return out
 
 
+def summarize_coverage(data, countries, start, end):
+    """Compare requested country-years with values available for one indicator."""
+    if start > end:
+        raise ValueError("Start year must not be after end year")
+    expected = {(iso, year) for iso in countries for year in range(start, end + 1)}
+    available = {key for key, value in data.items() if value is not None}
+    return {
+        "expected": len(expected),
+        "available": len(expected & available),
+        "missing": sorted(expected - available),
+        "unexpected": sorted(set(data) - expected),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", type=int, default=2000)
     ap.add_argument("--end", type=int, default=2023)
     ap.add_argument("--out", default="data/world_bank_indicators_real.csv")
     args = ap.parse_args()
+    if args.start > args.end:
+        ap.error("--start must not be after --end")
 
     # country metadata (region + income group) straight from the API
-    meta = requests.get(f"{BASE}/country/{';'.join(COUNTRIES)}",
-                        params={"format": "json", "per_page": 500}, timeout=60).json()[1]
+    meta = get_json(f"{BASE}/country/{';'.join(COUNTRIES)}",
+                    params={"format": "json", "per_page": 500})[1]
     info = {c["id"]: (c["name"], c["region"]["value"], c["incomeLevel"]["value"]) for c in meta}
 
     frames = {}
@@ -85,6 +117,17 @@ def main():
         else:
             print(f"{col:28s} <- NO DATA from any of {codes}")
             frames[col] = {}
+
+        coverage = summarize_coverage(frames[col], COUNTRIES, args.start, args.end)
+        print(f"  Coverage: expected={coverage['expected']}, "
+              f"available={coverage['available']}, missing={len(coverage['missing'])}, "
+              f"unexpected={len(coverage['unexpected'])}")
+        if coverage["missing"]:
+            examples = ", ".join(f"{iso}/{year}" for iso, year in coverage["missing"][:5])
+            print(f"  Missing value examples (up to 5): {examples}")
+            print("  Missing means absent or null in the response; values remain blank in CSV.")
+        if coverage["unexpected"]:
+            raise ValueError(f"Unexpected country-years for {col}: {coverage['unexpected'][:5]}")
 
     records = []
     for iso in COUNTRIES:
