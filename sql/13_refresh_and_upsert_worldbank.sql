@@ -7,6 +7,9 @@
 
 BEGIN;
 
+-- Fail instead of waiting indefinitely for a conflicting transaction.
+SET LOCAL lock_timeout = '10s';
+
 TRUNCATE TABLE worldbank.indicators_staging;
 
 \copy worldbank.indicators_staging (country_name, country_code, region, income_group, year, gdp_usd, population, life_expectancy, unemployment_rate, co2_emissions_per_capita, access_to_electricity_pct, source_file, ingested_at) FROM 'C:/Users/mpume/Downloads/world-bank-sql-data-pipeline/data/official/2026-10-15/world_bank_indicators.csv' WITH (FORMAT CSV, HEADER TRUE, ENCODING 'UTF8')
