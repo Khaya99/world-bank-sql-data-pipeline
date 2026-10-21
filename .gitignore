@@ -1,2 +1,5 @@
 # Tableau temporary and recovery files
 dashboard/~*
+
+# Local Python environment
+.venv/

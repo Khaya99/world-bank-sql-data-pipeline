@@ -8,6 +8,16 @@
 \set ON_ERROR_ROLLBACK off
 \set refresh_failed false
 
+-- Override with psql -v snapshot_dir="C:/path/to/snapshot/folder".
+-- Keep the current snapshot as the default for existing commands.
+\if :{?snapshot_dir}
+\else
+    \set snapshot_dir 'C:/Users/mpume/Downloads/world-bank-sql-data-pipeline/data/official/2026-10-22_001046'
+\endif
+-- Change the client directory before starting a logged refresh.
+-- ON_ERROR_STOP is still on: an invalid directory stops here.
+\cd :snapshot_dir
+
 -- Save the run's start separately from the data refresh.
 INSERT INTO worldbank.pipeline_runs (pipeline_name)
 VALUES ('worldbank_refresh_and_upsert')
@@ -41,7 +51,7 @@ TRUNCATE TABLE worldbank.indicators_staging;
     DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
 \endif
 
-\copy worldbank.indicators_staging (country_name, country_code, region, income_group, year, gdp_usd, population, life_expectancy, unemployment_rate, co2_emissions_per_capita, access_to_electricity_pct, source_file, ingested_at) FROM 'C:/Users/mpume/Downloads/world-bank-sql-data-pipeline/data/official/2026-10-15/world_bank_indicators.csv' WITH (FORMAT CSV, HEADER TRUE, ENCODING 'UTF8')
+\copy worldbank.indicators_staging (country_name, country_code, region, income_group, year, gdp_usd, population, life_expectancy, unemployment_rate, co2_emissions_per_capita, access_to_electricity_pct, source_file, ingested_at) FROM 'world_bank_indicators.csv' WITH (FORMAT CSV, HEADER TRUE, ENCODING 'UTF8')
 \ir maintenance/log_refresh_failure.sql
 \if :refresh_failed
     -- Stop in the calling script, not just the included helper.
