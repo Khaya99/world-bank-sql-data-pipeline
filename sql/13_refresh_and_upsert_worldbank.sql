@@ -4,15 +4,53 @@
 -- All six indicators must be present for this snapshot. Review these
 -- rules before using other periods or datasets where missingness is valid.
 \set ON_ERROR_STOP on
+\set AUTOCOMMIT on
+\set ON_ERROR_ROLLBACK off
+\set refresh_failed false
 
+-- Save the run's start separately from the data refresh.
+INSERT INTO worldbank.pipeline_runs (pipeline_name)
+VALUES ('worldbank_refresh_and_upsert')
+RETURNING run_id AS logged_run_id
+\gset
+
+-- Continue only far enough to record an error, then exit.
+\set ON_ERROR_STOP off
 BEGIN;
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
 
 -- Fail instead of waiting indefinitely for a conflicting transaction.
 SET LOCAL lock_timeout = '10s';
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
 
 TRUNCATE TABLE worldbank.indicators_staging;
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
 
 \copy worldbank.indicators_staging (country_name, country_code, region, income_group, year, gdp_usd, population, life_expectancy, unemployment_rate, co2_emissions_per_capita, access_to_electricity_pct, source_file, ingested_at) FROM 'C:/Users/mpume/Downloads/world-bank-sql-data-pipeline/data/official/2026-10-15/world_bank_indicators.csv' WITH (FORMAT CSV, HEADER TRUE, ENCODING 'UTF8')
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
+
+-- Local file errors may not set psql ERROR. Validation below also
+-- rejects the empty staging table if the file could not be opened.
 
 -- These rules apply to the saved 30-country, 2000-2023 snapshot.
 DO $$
@@ -77,6 +115,13 @@ BEGIN
 END;
 $$;
 
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
+
 -- Update the typed table only after validation passes.
 INSERT INTO worldbank.indicators_typed AS target (
     country_name, country_code, region, income_group, year,
@@ -113,9 +158,44 @@ DO UPDATE SET
     access_to_electricity_pct = EXCLUDED.access_to_electricity_pct,
     source_file = EXCLUDED.source_file,
     ingested_at = EXCLUDED.ingested_at;
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
+
+-- Save success together with the refreshed data.
+UPDATE worldbank.pipeline_runs
+SET status = 'succeeded',
+    finished_at = clock_timestamp(),
+    staging_rows = (
+        SELECT COUNT(*) FROM worldbank.indicators_staging
+    ),
+    typed_rows = (
+        SELECT COUNT(*) FROM worldbank.indicators_typed
+    )
+WHERE run_id = :logged_run_id
+  AND status = 'running';
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
 
 COMMIT;
+\ir maintenance/log_refresh_failure.sql
+\if :refresh_failed
+    -- Stop in the calling script, not just the included helper.
+    \set ON_ERROR_STOP on
+    DO $$ BEGIN RAISE EXCEPTION 'Refresh failed; inspect worldbank.pipeline_runs and terminal errors'; END $$;
+\endif
 
-SELECT
-    (SELECT COUNT(*) FROM worldbank.indicators_staging) AS staging_rows,
-    (SELECT COUNT(*) FROM worldbank.indicators_typed) AS typed_rows;
+\set ON_ERROR_STOP on
+
+-- Report the outcome of this execution.
+SELECT run_id, status, staging_rows, typed_rows,
+       finished_at - started_at AS duration
+FROM worldbank.pipeline_runs
+WHERE run_id = :logged_run_id;
