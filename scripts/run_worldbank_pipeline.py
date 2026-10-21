@@ -35,11 +35,11 @@ def run_pipeline(repo, psql, host, port, user, database):
         raise RuntimeError("Extraction produced no usable CSV; database refresh was not started.")
 
     # SQL performs the content validation and commits or rolls back the refresh.
-    print("2/2: Loading this snapshot. Enter your PostgreSQL password when prompted.", flush=True)
+    print("2/2: Loading this snapshot using saved PostgreSQL credentials.", flush=True)
     try:
         subprocess.run(
             [str(psql), "-X", "-h", host, "-p", str(port), "-U", user,
-             "-d", database, "-W", "-v", f"snapshot_dir={snapshot.as_posix()}",
+             "-d", database, "-w", "-v", f"snapshot_dir={snapshot.as_posix()}",
              "-f", str(refresh)],
             cwd=repo, check=True,
         )

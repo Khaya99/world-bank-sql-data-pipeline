@@ -58,9 +58,14 @@ downloads the fixed 2000-2023 period, and passes that directory to script 13.
 An extraction error or absent/empty output stops before PostgreSQL is invoked.
 SQL retains responsibility for validating all row contents and coverage.
 
-The runner prompts for the PostgreSQL password; it does not store it. It does
-not retry whole pipeline runs. The extractor's existing request retries remain
-unchanged. This is a manual runner, not an unattended scheduled job.
+The runner uses psql's lowercase `-w` option, so authentication fails instead
+of waiting for a password prompt. On Windows, configure the matching connection
+in `%APPDATA%\postgresql\pgpass.conf` under the Windows account running the
+pipeline. Keep that plaintext credential file outside this repository and do
+not commit it. The runner itself does not store a password.
+
+The runner does not retry whole pipeline runs. The extractor's existing request
+retries remain unchanged. No Windows scheduled task has been configured yet.
 
 The database log still covers only the refresh step. Extraction errors appear
 in the terminal and do not create a database run entry. Downloaded files are
@@ -70,6 +75,10 @@ The one-command flow was verified with a fresh API download: database run 8
 completed successfully with 720 staging rows and 720 typed rows. Five offline
 runner tests also passed, covering extraction failures, missing output, exact
 snapshot selection, database exit-code propagation, and missing psql.
+
+After switching to noninteractive authentication, the five offline tests passed
+again and database run 9 succeeded with 720 rows in each table, without a password
+prompt.
 
 Run the offline orchestration tests with:
 

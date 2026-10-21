@@ -61,7 +61,7 @@ class PipelineRunnerTests(unittest.TestCase):
             self.assertEqual(extract[0], runner.sys.executable)
             csv_path = Path(extract[extract.index("--out") + 1])
             self.assertIn(f"snapshot_dir={csv_path.parent.as_posix()}", load)
-            self.assertIn("-W", load)
+            self.assertIn("-w", load)
 
     def test_database_failure_is_propagated_without_retry(self):
         def execute(command, **kwargs):
