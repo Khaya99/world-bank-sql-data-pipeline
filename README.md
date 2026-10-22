@@ -85,3 +85,8 @@ These are relationships in the synthetic data. They do not prove that one indica
 - [x] Data transformation
 - [x] SQL analysis
 - [x] Tableau visualisations
+- [x] Official API extraction and logged PostgreSQL refresh
+- [x] Monthly Windows task configured; on-demand execution verified
+
+See [monthly scheduling settings and verification](docs/monthly_schedule.md).
+The first calendar-triggered monthly execution remains to be observed.

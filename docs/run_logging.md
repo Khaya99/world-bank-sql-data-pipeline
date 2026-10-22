@@ -65,7 +65,8 @@ pipeline. Keep that plaintext credential file outside this repository and do
 not commit it. The runner itself does not store a password.
 
 The runner does not retry whole pipeline runs. The extractor's existing request
-retries remain unchanged. No Windows scheduled task has been configured yet.
+retries remain unchanged. A monthly Windows task is configured and its on-demand
+execution has been verified. See [task settings and verification](monthly_schedule.md).
 
 The database log still covers only the refresh step. Extraction errors appear
 in the terminal and do not create a database run entry. Downloaded files are
