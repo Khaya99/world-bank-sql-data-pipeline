@@ -90,3 +90,17 @@ These are relationships in the synthetic data. They do not prove that one indica
 
 See [monthly scheduling settings and verification](docs/monthly_schedule.md).
 The first calendar-triggered monthly execution remains to be observed.
+
+## Official World Bank analysis: electricity access and life expectancy
+
+This analysis uses official World Bank data for 30 selected countries between 2000 and 2023. It extends the project’s earlier synthetic-data analysis with findings from official observations.
+
+Across 720 country-year observations, electricity access and life expectancy had a Pearson correlation of **0.778**. Comparing each country’s change between 2000 and 2023 produced a correlation of **0.660** across 30 countries.
+
+The Tableau dashboard visualizes these changes, with electricity access measured in percentage points and life expectancy measured in years. Each point represents one country.
+
+Countries with larger electricity-access gains tended to have larger life-expectancy gains. This association does not establish causation: the comparison uses two endpoint years and does not account for other influences.
+
+The analysis includes SQL queries, an exported CSV, a Tableau packaged workbook, and a PNG dashboard preview.
+
+![Electricity access and life expectancy changes across 30 countries, 2000–2023](dashboard/official_world_bank_electricity_life_expectancy_2000_2023.png)
