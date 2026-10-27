@@ -86,3 +86,13 @@ Run the offline orchestration tests with:
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_pipeline_runner.py
 ```
+
+## Automatic analysis CSV export
+
+After a successful PostgreSQL refresh, the Python runner automatically exports the electricity-access and life-expectancy changes for 2000–2023 to the report CSV.
+
+The export uses UTF-8 encoding and checks the expected column names and 30 unique countries before replacing the previous CSV. A test verifies that a failed export preserves the previous report and removes its temporary file.
+
+The updated runner was verified with database refresh run 12 and an overall exit code of 0. The database run log records the database refresh; report-export failures are reported separately through the runner’s error message and exit code.
+
+The Tableau workbook and GitHub dashboard image remain saved snapshots and require separate updates.

@@ -50,18 +50,52 @@ class PipelineRunnerTests(unittest.TestCase):
             self.assertEqual(process.call_count, 1)
 
     def test_success_passes_exact_new_snapshot_and_uses_same_python(self):
+        report_csv = (
+            "country_name,country_code,electricity_change_pp,"
+            "life_expectancy_change_years\n"
+            + "".join(
+                f"Test country {i},T{i:02d},10.00,5.00\n"
+                for i in range(30)
+            )
+        )
+
         def execute(command, **kwargs):
             if "--out" in command:
                 self.write_csv(command)
-        with patch.object(runner.subprocess, "run", side_effect=execute) as process:
+            elif "stdout" in kwargs:
+                kwargs["stdout"].write(report_csv.encode("utf-8"))
+
+        with patch.object(
+            runner.subprocess, "run", side_effect=execute
+        ) as process:
             self.assertEqual(self.run_pipeline(), 0)
-            self.assertEqual(process.call_count, 2)
+            self.assertEqual(process.call_count, 3)
+
             extract = process.call_args_list[0].args[0]
             load = process.call_args_list[1].args[0]
+            export_call = process.call_args_list[2]
+            export = export_call.args[0]
+
             self.assertEqual(extract[0], runner.sys.executable)
             csv_path = Path(extract[extract.index("--out") + 1])
-            self.assertIn(f"snapshot_dir={csv_path.parent.as_posix()}", load)
+            self.assertIn(
+                f"snapshot_dir={csv_path.parent.as_posix()}", load
+            )
             self.assertIn("-w", load)
+            self.assertIn("-w", export)
+            self.assertIn("ON_ERROR_STOP=1", export)
+            self.assertEqual(
+                Path(export[export.index("-f") + 1]).name,
+                "17_export_official_analysis.sql",
+            )
+
+            report = (
+                Path(export_call.kwargs["cwd"])
+                / "data" / "processed"
+                / "electricity_life_expectancy_changes_2000_2023.csv"
+            )
+            self.assertEqual(report.read_text(encoding="utf-8"), report_csv)
+            self.assertEqual(list(report.parent.glob("*.tmp")), [])
 
     def test_database_failure_is_propagated_without_retry(self):
         def execute(command, **kwargs):
@@ -72,6 +106,34 @@ class PipelineRunnerTests(unittest.TestCase):
         with patch.object(runner.subprocess, "run", side_effect=execute) as process:
             self.assertEqual(self.run_pipeline(), 3)
             self.assertEqual(process.call_count, 2)
+    def test_failed_export_preserves_previous_report(self):
+        reports = []
+        original = b"previous report contents\n"
+
+        def execute(command, **kwargs):
+            if "--out" in command:
+                self.write_csv(command)
+                report = (
+                    Path(kwargs["cwd"])
+                    / "data" / "processed"
+                    / "electricity_life_expectancy_changes_2000_2023.csv"
+                )
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_bytes(original)
+                reports.append(report)
+            elif "stdout" in kwargs:
+                kwargs["stdout"].write(b"partial export\n")
+                raise subprocess.CalledProcessError(3, command)
+
+        with patch.object(
+            runner.subprocess, "run", side_effect=execute
+        ) as process:
+            self.assertEqual(self.run_pipeline(), 3)
+            self.assertEqual(process.call_count, 3)
+
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0].read_bytes(), original)
+        self.assertEqual(list(reports[0].parent.glob("*.tmp")), [])
 
     def test_missing_psql_stops_before_any_download(self):
         self.psql.unlink()

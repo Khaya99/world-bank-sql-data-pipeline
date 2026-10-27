@@ -1,31 +1,31 @@
-"country_name","country_code","electricity_change_pp","life_expectancy_change_years"
-"Kenya","KEN",61.00,7.56
-"Ethiopia","ETH",42.70,16.44
-"India","IND",39.20,9.25
-"Nigeria","NGA",18.00,7.32
-"Thailand","THA",17.90,5.21
-"South Africa","ZAF",15.30,7.77
-"Indonesia","IDN",13.10,4.85
-"Viet Nam","VNM",11.60,1.84
-"Brazil","BRA",5.40,6.26
-"Argentina","ARG",4.30,3.49
-"China","CHN",3.30,5.67
-"Egypt, Arab Rep.","EGY",2.30,4.30
-"Russian Federation","RUS",2.20,7.77
-"Mexico","MEX",1.70,2.51
-"Turkiye","TUR",0.10,5.23
-"Poland","POL",0.00,4.51
-"Japan","JPN",0.00,2.97
-"Korea, Rep.","KOR",0.00,7.52
-"Australia","AUS",0.00,3.82
-"Norway","NOR",0.00,4.38
-"Sweden","SWE",0.00,3.67
-"Netherlands","NLD",0.00,3.88
-"Spain","ESP",0.00,4.97
-"Saudi Arabia","SAU",0.00,6.13
-"Italy","ITA",0.00,3.57
-"France","FRA",0.00,3.78
-"Germany","DEU",0.00,3.11
-"United Kingdom","GBR",0.00,3.50
-"United States","USA",0.00,1.75
-"Canada","CAN",0.00,2.46
+country_name,country_code,electricity_change_pp,life_expectancy_change_years
+Kenya,KEN,61.00,7.56
+Ethiopia,ETH,42.70,16.44
+India,IND,39.20,9.25
+Nigeria,NGA,18.00,7.32
+Thailand,THA,17.90,5.21
+South Africa,ZAF,15.30,7.77
+Indonesia,IDN,13.10,4.85
+Viet Nam,VNM,11.60,1.84
+Brazil,BRA,5.40,6.26
+Argentina,ARG,4.30,3.49
+China,CHN,3.30,5.67
+"Egypt, Arab Rep.",EGY,2.30,4.30
+Russian Federation,RUS,2.20,7.77
+Mexico,MEX,1.70,2.51
+Turkiye,TUR,0.10,5.23
+Australia,AUS,0.00,3.82
+Canada,CAN,0.00,2.46
+Germany,DEU,0.00,3.11
+Spain,ESP,0.00,4.97
+France,FRA,0.00,3.78
+United Kingdom,GBR,0.00,3.50
+Italy,ITA,0.00,3.57
+Japan,JPN,0.00,2.97
+"Korea, Rep.",KOR,0.00,7.52
+Netherlands,NLD,0.00,3.88
+Norway,NOR,0.00,4.38
+Poland,POL,0.00,4.51
+Saudi Arabia,SAU,0.00,6.13
+Sweden,SWE,0.00,3.67
+United States,USA,0.00,1.75
