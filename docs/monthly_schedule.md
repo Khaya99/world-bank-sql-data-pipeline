@@ -97,3 +97,9 @@ in a persistent console log. A forced stop or connection loss may leave a
 Snapshots use UTC timestamps in their folder names. Downloads remain on disk;
 automatic retention cleanup is not configured. The scheduled task updates local
 data and PostgreSQL only: it does not commit or push changes to GitHub.
+
+### Verification after adding the report export
+
+On 28 October 2026, the existing monthly task was started manually through Windows Task Scheduler at 11:56:48. It completed with Last Run Result `0x0`. The report CSV was updated at 11:57:05, and the working Tableau workbook refreshed without an error.
+
+This confirms that an on-demand run of the scheduled task includes the report CSV export. The first calendar-triggered monthly run remains to be verified; the next scheduled run is 1 November 2026 at 09:00 South Africa time.
