@@ -96,3 +96,13 @@ The export uses UTF-8 encoding and checks the expected column names and 30 uniqu
 The updated runner was verified with database refresh run 12 and an overall exit code of 0. The database run log records the database refresh; report-export failures are reported separately through the runner’s error message and exit code.
 
 The Tableau workbook and GitHub dashboard image remain saved snapshots and require separate updates.
+
+## Tableau workbook connected to the report CSV
+
+The working workbook, `dashboard/official_world_bank_electricity_life_expectancy_2000_2023_live_csv.twb`, uses a live connection to `data/processed/electricity_life_expectancy_changes_2000_2023.csv`.
+
+After a successful pipeline run, open this workbook and select **Data → the report data source → Refresh** to reread the CSV. The connection was verified by reopening the workbook and refreshing without an error.
+
+The workbook currently stores an absolute local file path. On another computer, use **Edit Connection** to select the CSV in that computer’s project folder.
+
+The packaged `.twbx` workbook and GitHub dashboard PNG remain saved snapshots and require separate updates.
