@@ -102,4 +102,4 @@ data and PostgreSQL only: it does not commit or push changes to GitHub.
 
 On 28 October 2026, the existing monthly task was started manually through Windows Task Scheduler at 11:56:48. It completed with Last Run Result `0x0`. The report CSV was updated at 11:57:05, and the working Tableau workbook refreshed without an error.
 
-This confirms that an on-demand run of the scheduled task includes the report CSV export. The first calendar-triggered monthly run remains to be verified; the next scheduled run is 1 November 2026 at 09:00 South Africa time.
+This confirms that an on-demand run of the scheduled task includes the report CSV export. The first automatic catch-up run was verified on 1 November 2026. The computer was not awake or connected to AC power at the scheduled 09:00 start. After power was connected, Windows started the task automatically at 23:41:25 without a manual Run action. Task Scheduler reported `0x0`, and the report CSV was updated at 23:42:44. The next scheduled run is 1 December 2026 at 09:00 South Africa time.
