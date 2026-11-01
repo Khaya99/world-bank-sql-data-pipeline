@@ -106,3 +106,21 @@ After a successful pipeline run, open this workbook and select **Data → the re
 The workbook currently stores an absolute local file path. On another computer, use **Edit Connection** to select the CSV in that computer’s project folder.
 
 The packaged `.twbx` workbook and GitHub dashboard PNG remain saved snapshots and require separate updates.
+
+## Development comparison export
+
+After a successful database refresh, the runner also exports
+`data/processed/development_comparison_2023.csv` using
+`sql/18_export_development_comparison.sql`.
+
+This report contains GDP per capita (current US$), life expectancy
+(years), and electricity access (%) for 30 selected countries in 2023.
+GDP per capita is calculated as GDP divided by population.
+
+Each report is checked for its expected column names and 30 unique
+country codes before replacing its previous CSV. The two reports
+are replaced separately.
+
+Database refresh run 15 succeeded with 720 staging rows and 720 typed
+rows. Both CSV exports completed, and the runner returned exit code 0.
+Both Tableau data sources were refreshed without a reported error.

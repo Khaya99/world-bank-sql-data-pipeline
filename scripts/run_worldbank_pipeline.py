@@ -8,12 +8,15 @@ import sys
 import csv
 import tempfile
 
-def export_analysis(repo, psql, host, port, user, database):
-    report = (
-        repo / "data" / "processed"
-        / "electricity_life_expectancy_changes_2000_2023.csv"
-    )
-    export_sql = repo / "sql" / "17_export_official_analysis.sql"
+def export_analysis(
+    repo, psql, host, port, user, database,
+    *,
+    report_filename="electricity_life_expectancy_changes_2000_2023.csv",
+    sql_filename="17_export_official_analysis.sql",
+    expected_columns=None,
+):
+    report = repo / "data" / "processed" / report_filename
+    export_sql = repo / "sql" / sql_filename
     report.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
 
@@ -38,16 +41,15 @@ def export_analysis(repo, psql, host, port, user, database):
                 check=True,
             )
 
-        with temporary_path.open(
-            encoding="utf-8", newline=""
-        ) as exported:
+        with temporary_path.open(encoding="utf-8", newline="") as exported:
             reader = csv.DictReader(exported)
-            expected_columns = [
-                "country_name",
-                "country_code",
-                "electricity_change_pp",
-                "life_expectancy_change_years",
-            ]
+            if expected_columns is None:
+                expected_columns = [
+                    "country_name",
+                    "country_code",
+                    "electricity_change_pp",
+                    "life_expectancy_change_years",
+                ]
             if reader.fieldnames != expected_columns:
                 raise RuntimeError("Unexpected report CSV columns.")
             rows = list(reader)
@@ -103,6 +105,19 @@ def run_pipeline(repo, psql, host, port, user, database):
 
     try:
         export_analysis(repo, psql, host, port, user, database)
+        export_analysis(
+            repo, psql, host, port, user, database,
+            report_filename="development_comparison_2023.csv",
+            sql_filename="18_export_development_comparison.sql",
+            expected_columns=[
+                "country_name",
+                "country_code",
+                "year",
+                "gdp_per_capita_current_usd",
+                "life_expectancy_years",
+                "access_to_electricity_pct",
+            ],
+        )
     except subprocess.CalledProcessError as error:
         print(
             "Database refresh succeeded, but the report export failed. "

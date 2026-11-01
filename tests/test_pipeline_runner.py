@@ -59,17 +59,34 @@ class PipelineRunnerTests(unittest.TestCase):
             )
         )
 
+        comparison_csv = (
+            "country_name,country_code,year,"
+            "gdp_per_capita_current_usd,life_expectancy_years,"
+            "access_to_electricity_pct\n"
+            + "".join(
+                f"Test country {i},T{i:02d},2023,5000.00,70.00,90.00\n"
+                for i in range(30)
+            )
+        )
+
         def execute(command, **kwargs):
             if "--out" in command:
                 self.write_csv(command)
             elif "stdout" in kwargs:
-                kwargs["stdout"].write(report_csv.encode("utf-8"))
+                sql_name = Path(command[command.index("-f") + 1]).name
+                if sql_name == "17_export_official_analysis.sql":
+                    output = report_csv
+                elif sql_name == "18_export_development_comparison.sql":
+                    output = comparison_csv
+                else:
+                    raise AssertionError(f"Unexpected export: {sql_name}")
+                kwargs["stdout"].write(output.encode("utf-8"))
 
         with patch.object(
             runner.subprocess, "run", side_effect=execute
         ) as process:
             self.assertEqual(self.run_pipeline(), 0)
-            self.assertEqual(process.call_count, 3)
+            self.assertEqual(process.call_count, 4)
 
             extract = process.call_args_list[0].args[0]
             load = process.call_args_list[1].args[0]
@@ -96,6 +113,33 @@ class PipelineRunnerTests(unittest.TestCase):
             )
             self.assertEqual(report.read_text(encoding="utf-8"), report_csv)
             self.assertEqual(list(report.parent.glob("*.tmp")), [])
+
+            comparison_call = process.call_args_list[3]
+            comparison_command = comparison_call.args[0]
+
+            self.assertIn("-w", comparison_command)
+            self.assertIn("ON_ERROR_STOP=1", comparison_command)
+            self.assertEqual(
+                Path(
+                    comparison_command[comparison_command.index("-f") + 1]
+                ).name,
+                "18_export_development_comparison.sql",
+            )
+
+            comparison_report = (
+                Path(comparison_call.kwargs["cwd"])
+                / "data"
+                / "processed"
+                / "development_comparison_2023.csv"
+            )
+            self.assertEqual(
+                comparison_report.read_text(encoding="utf-8"),
+                comparison_csv,
+            )
+            self.assertEqual(
+                list(comparison_report.parent.glob("*.tmp")),
+                [],
+            )
 
     def test_database_failure_is_propagated_without_retry(self):
         def execute(command, **kwargs):
