@@ -103,4 +103,4 @@ Countries with larger electricity-access gains tended to have larger life-expect
 
 The analysis includes SQL queries, an exported CSV, a Tableau packaged workbook, and a PNG dashboard preview.
 
-![Electricity access and life expectancy changes across 30 countries, 2000–2023](dashboard/official_world_bank_electricity_life_expectancy_2000_2023.png)
+![World Bank dashboard: electricity access, GDP per capita and life expectancy](dashboard/world_bank_development_dashboard.png)
