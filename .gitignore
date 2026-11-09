@@ -3,3 +3,9 @@ dashboard/~*
 
 # Local Python environment
 .venv/
+
+# Downloaded World Bank snapshots
+data/official/20*/
+
+# Local pipeline logs
+logs/
