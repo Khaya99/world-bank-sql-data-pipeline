@@ -86,10 +86,10 @@ These are relationships in the synthetic data. They do not prove that one indica
 - [x] SQL analysis
 - [x] Tableau visualisations
 - [x] Official API extraction and logged PostgreSQL refresh
-- [x] Monthly Windows task configured; on-demand execution verified
+- [x] Monthly Windows task configured; on-demand execution and automatic catch-up execution verified
 
 See [monthly scheduling settings and verification](docs/monthly_schedule.md).
-The first calendar-triggered monthly execution remains to be observed.
+The first automatic monthly catch-up run was verified on 1 November 2026. After the scheduled 09:00 start was missed, Windows Task Scheduler automatically started the pipeline at 23:41:25 SAST when power was connected. The task completed successfully (`0x0`), and the report CSV was updated at 23:42:44.
 
 ## Official World Bank analysis: electricity access and life expectancy
 
