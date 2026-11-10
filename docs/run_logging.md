@@ -124,3 +124,39 @@ are replaced separately.
 Database refresh run 15 succeeded with 720 staging rows and 720 typed
 rows. Both CSV exports completed, and the runner returned exit code 0.
 Both Tableau data sources were refreshed without a reported error.
+
+
+## Python runner logs
+
+The pipeline runner creates a separate timestamped log file for each run
+under `logs/`. Messages are written to both the terminal and the log file,
+using UTC timestamps.
+
+Logs include:
+- Pipeline start, final status and total duration.
+- Extraction, database refresh and report-export stage messages.
+- Subprocess stdout and stderr, captured when each command finishes.
+- Error tracebacks.
+- Validated report paths and the downloaded snapshot path.
+
+Report CSV contents are written directly to temporary files, separately
+from log messages. Each report is validated before replacing its previous
+version. Reports are published individually, so an earlier report may
+already be updated if a later export fails.
+
+The PostgreSQL `worldbank.pipeline_runs` table still records the database
+refresh. Python log files also cover failures before that refresh begins.
+
+Verification:
+- Logging smoke test passed.
+- Missing executable test returned exit code 1.
+- Controlled subprocess failure captured stdout, stderr and exit code 7.
+- Full pipeline completed successfully with both reports published and
+  exit code 0.
+
+Limitations:
+- Subprocess output is logged after each command finishes, not streamed live.
+- A forced termination may prevent the final status from being logged.
+- Automatic log retention cleanup is not configured.
+
+Local logs are excluded from Git.

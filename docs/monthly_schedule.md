@@ -90,9 +90,7 @@ LIMIT 1;
 ## Current limits
 
 The database log covers the refresh step, not extraction. Extraction failures can
-occur before any database log entry exists. Task output is not currently captured
-in a persistent console log. A forced stop or connection loss may leave a
-`running` log entry requiring investigation. See [run logging](run_logging.md).
+occur before any database log entry exists. The Python runner now writes timestamped logs under `logs/`, including stage outcomes, subprocess output and error tracebacks. Subprocess output is recorded when each command finishes. A forced stop or connection loss may leave a `running` log entry requiring investigation. See [run logging](run_logging.md).
 
 Snapshots use UTC timestamps in their folder names. Downloads remain on disk;
 automatic retention cleanup is not configured. The scheduled task updates local

@@ -9,3 +9,7 @@ data/official/20*/
 
 # Local pipeline logs
 logs/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]

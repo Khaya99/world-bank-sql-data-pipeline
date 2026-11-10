@@ -7,6 +7,81 @@ import subprocess
 import sys
 import csv
 import tempfile
+import logging
+import time
+
+def setup_logging(repo):
+    log_directory = repo / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    log_path = log_directory / f"pipeline_{run_id}.log"
+
+    logger = logging.getLogger("worldbank_pipeline")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    # Avoid duplicate messages if setup is called again.
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+
+    formatter = logging.Formatter(
+        "%(asctime)s UTC | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    formatter.converter = time.gmtime
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    logger.info("Logging started | run_id=%s", run_id)
+    return logger, log_path
+
+def run_logged(command, *, cwd, stage, stdout=None):
+    logger = logging.getLogger("worldbank_pipeline")
+    started = time.perf_counter()
+    logger.info("Stage started | stage=%s", stage)
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            stdout=stdout if stdout is not None else subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+        # When stdout is a CSV file, leave its contents out of the log.
+        if stdout is None and result.stdout:
+            for line in result.stdout.splitlines():
+                logger.info("[%s stdout] %s", stage, line)
+
+        if result.stderr:
+            for line in result.stderr.splitlines():
+                logger.warning("[%s stderr] %s", stage, line)
+
+        result.check_returncode()
+
+    except Exception:
+        logger.exception("Stage failed | stage=%s", stage)
+        raise
+
+    logger.info(
+        "Stage succeeded | stage=%s | duration_seconds=%.2f",
+        stage,
+        time.perf_counter() - started,
+    )
+    return result
 
 def export_analysis(
     repo, psql, host, port, user, database,
@@ -14,6 +89,7 @@ def export_analysis(
     report_filename="electricity_life_expectancy_changes_2000_2023.csv",
     sql_filename="17_export_official_analysis.sql",
     expected_columns=None,
+        logger = logging.getLogger("worldbank_pipeline")
 ):
     report = repo / "data" / "processed" / report_filename
     export_sql = repo / "sql" / sql_filename
@@ -28,7 +104,7 @@ def export_analysis(
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-            subprocess.run(
+            run_logged(
                 [
                     str(psql), "-X", "-q",
                     "-h", host, "-p", str(port),
@@ -38,7 +114,7 @@ def export_analysis(
                 ],
                 cwd=repo,
                 stdout=temporary,
-                check=True,
+                stage=f"export:{report_filename}",
             )
 
         with temporary_path.open(encoding="utf-8", newline="") as exported:
@@ -58,12 +134,13 @@ def export_analysis(
             raise RuntimeError("Expected 30 unique countries in the report.")
 
         temporary_path.replace(report)
-        print(f"Analysis CSV updated: {report}", flush=True)
+        logger.info("Report validated and published | path=%s", report)
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
 
 def run_pipeline(repo, psql, host, port, user, database):
+    logger = logging.getLogger("worldbank_pipeline")
     extractor = repo / "scripts/fetch_worldbank.py"
     refresh = repo / "sql/13_refresh_and_upsert_worldbank.sql"
     helper = repo / "sql/maintenance/log_refresh_failure.sql"
@@ -76,31 +153,33 @@ def run_pipeline(repo, psql, host, port, user, database):
     snapshot = repo / "data/official" / stamp
     snapshot.mkdir(parents=True, exist_ok=False)
     csv_path = snapshot / "world_bank_indicators.csv"
-    print(f"1/2: Downloading the snapshot to {snapshot}", flush=True)
+    logger.info("Downloading snapshot | path=%s", snapshot)
     try:
-        subprocess.run(
+                run_logged(
             [sys.executable, "-B", str(extractor), "--start", "2000",
              "--end", "2023", "--out", str(csv_path)],
-            cwd=repo, check=True,
+            cwd=repo,
+            stage="extraction",
         )
     except subprocess.CalledProcessError as error:
-        print("Extraction failed; database refresh was not started.", file=sys.stderr)
+        logger.error("Extraction failed; database refresh was not started.")
         return error.returncode or 1
 
     if not csv_path.is_file() or csv_path.stat().st_size == 0:
         raise RuntimeError("Extraction produced no usable CSV; database refresh was not started.")
 
     # SQL performs the content validation and commits or rolls back the refresh.
-    print("2/2: Loading this snapshot using saved PostgreSQL credentials.", flush=True)
+    logger.info("Validating and loading snapshot into PostgreSQL")
     try:
-        subprocess.run(
+        run_logged(
             [str(psql), "-X", "-h", host, "-p", str(port), "-U", user,
              "-d", database, "-w", "-v", f"snapshot_dir={snapshot.as_posix()}",
              "-f", str(refresh)],
-            cwd=repo, check=True,
+            cwd=repo,
+            stage="database_refresh",
         )
     except subprocess.CalledProcessError as error:
-        print("Database refresh failed. Inspect the terminal errors and pipeline_runs.", file=sys.stderr)
+        logger.error("Database refresh failed. Inspect this log and pipeline_runs.")
         return error.returncode or 1
 
     try:
@@ -119,40 +198,77 @@ def run_pipeline(repo, psql, host, port, user, database):
             ],
         )
     except subprocess.CalledProcessError as error:
-        print(
-            "Database refresh succeeded, but the report export failed. "
-            "The previous report CSV was preserved.",
-            file=sys.stderr,
+        logger.exception(
+            "Database refresh succeeded, but a report export failed. "
+            "Reports published earlier in this run may already be updated."
         )
         return error.returncode or 1
-    except (OSError, RuntimeError, UnicodeError, csv.Error) as error:
-        print(
-            f"Database refresh succeeded, but the report export failed: {error}",
-            file=sys.stderr,
+    except (OSError, RuntimeError, UnicodeError, csv.Error):
+        logger.exception(
+            "Database refresh succeeded, but a report export failed. "
+            "Reports published earlier in this run may already be updated."
         )
         return 1
 
-    print(f"Pipeline completed. Snapshot: {csv_path}", flush=True)
+    logger.info("Pipeline completed | snapshot=%s", csv_path)
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--psql", type=Path, default=Path("C:/Program Files/PostgreSQL/18/bin/psql.exe"))
+    parser.add_argument(
+        "--psql",
+        type=Path,
+        default=Path("C:/Program Files/PostgreSQL/18/bin/psql.exe"),
+    )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=5432)
     parser.add_argument("--user", default="postgres")
     parser.add_argument("--database", default="world_bank_analytics")
     args = parser.parse_args()
+
     repo = Path(__file__).resolve().parents[1]
+    logger, log_path = setup_logging(repo)
+    started = time.perf_counter()
+
+    logger.info("Pipeline started")
+    logger.info("Log file: %s", log_path)
+
+    exit_code = 1
+
     try:
-        return run_pipeline(repo, args.psql.resolve(), args.host, args.port, args.user, args.database)
-    except (OSError, RuntimeError) as error:
-        print(f"Pipeline stopped: {error}", file=sys.stderr)
-        return 1
+        exit_code = run_pipeline(
+            repo,
+            args.psql.resolve(),
+            args.host,
+            args.port,
+            args.user,
+            args.database,
+        )
     except KeyboardInterrupt:
-        print("Pipeline interrupted. Check the last run before restarting.", file=sys.stderr)
-        return 130
+        logger.warning(
+            "Pipeline interrupted. Check the last run before restarting."
+        )
+        exit_code = 130
+    except Exception:
+        logger.exception("Pipeline stopped because of an unexpected error")
+        exit_code = 1
+    finally:
+        elapsed = time.perf_counter() - started
+
+        if exit_code == 0:
+            logger.info("Pipeline succeeded | duration_seconds=%.2f", elapsed)
+        else:
+            logger.error(
+                "Pipeline failed or interrupted | exit_code=%s | "
+                "duration_seconds=%.2f",
+                exit_code,
+                elapsed,
+            )
+
+        logging.shutdown()
+
+    return exit_code
 
 
 if __name__ == "__main__":
