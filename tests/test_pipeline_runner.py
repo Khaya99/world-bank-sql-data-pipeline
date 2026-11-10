@@ -1,16 +1,12 @@
-"""Offline checks for orchestration; no API requests or database writes."""
+"""Offline checks for orchestration and alerts; no external services."""
 
-import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts/run_worldbank_pipeline.py"
-spec = importlib.util.spec_from_file_location("runner", MODULE_PATH)
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+from scripts import run_worldbank_pipeline as runner
 
 
 class PipelineRunnerTests(unittest.TestCase):
@@ -39,12 +35,12 @@ class PipelineRunnerTests(unittest.TestCase):
         def fail(command, **kwargs):
             self.write_csv(command)
             raise subprocess.CalledProcessError(1, command)
-        with patch.object(runner.subprocess, "run", side_effect=fail) as process:
+        with patch.object(runner, "run_logged", side_effect=fail) as process:
             self.assertEqual(self.run_pipeline(), 1)
             self.assertEqual(process.call_count, 1)
 
     def test_missing_csv_never_starts_database(self):
-        with patch.object(runner.subprocess, "run") as process:
+        with patch.object(runner, "run_logged") as process:
             with self.assertRaisesRegex(RuntimeError, "no usable CSV"):
                 self.run_pipeline()
             self.assertEqual(process.call_count, 1)
@@ -83,7 +79,7 @@ class PipelineRunnerTests(unittest.TestCase):
                 kwargs["stdout"].write(output.encode("utf-8"))
 
         with patch.object(
-            runner.subprocess, "run", side_effect=execute
+            runner, "run_logged", side_effect=execute
         ) as process:
             self.assertEqual(self.run_pipeline(), 0)
             self.assertEqual(process.call_count, 4)
@@ -147,7 +143,7 @@ class PipelineRunnerTests(unittest.TestCase):
                 self.write_csv(command)
             else:
                 raise subprocess.CalledProcessError(3, command)
-        with patch.object(runner.subprocess, "run", side_effect=execute) as process:
+        with patch.object(runner, "run_logged", side_effect=execute) as process:
             self.assertEqual(self.run_pipeline(), 3)
             self.assertEqual(process.call_count, 2)
     def test_failed_export_preserves_previous_report(self):
@@ -170,7 +166,7 @@ class PipelineRunnerTests(unittest.TestCase):
                 raise subprocess.CalledProcessError(3, command)
 
         with patch.object(
-            runner.subprocess, "run", side_effect=execute
+            runner, "run_logged", side_effect=execute
         ) as process:
             self.assertEqual(self.run_pipeline(), 3)
             self.assertEqual(process.call_count, 3)
@@ -181,11 +177,104 @@ class PipelineRunnerTests(unittest.TestCase):
 
     def test_missing_psql_stops_before_any_download(self):
         self.psql.unlink()
-        with patch.object(runner.subprocess, "run") as process:
+        with patch.object(runner, "run_logged") as process:
             with self.assertRaises(FileNotFoundError):
                 self.run_pipeline()
             process.assert_not_called()
 
+class PipelineAlertTests(unittest.TestCase):
+    def setUp(self):
+        # A fake logger records messages without creating log files.
+        self.logger = Mock()
+        self.log_path = Path("test-logs") / "pipeline_test.log"
+
+        # Replace external work before each test.
+        # addCleanup restores the real functions after each test,
+        # even when a test fails.
+        replacements = {
+            "setup_logging": {
+                "return_value": (self.logger, self.log_path)
+            },
+            "run_pipeline": {"return_value": 0},
+            "send_email": {},
+        }
+
+        for name, options in replacements.items():
+            patcher = patch.object(runner, name, **options)
+            fake = patcher.start()
+            self.addCleanup(patcher.stop)
+            setattr(self, name, fake)
+
+        # Prevent argparse from reading unittest's command arguments.
+        argv_patch = patch.object(
+            runner.sys, "argv", ["run_worldbank_pipeline.py"]
+        )
+        argv_patch.start()
+        self.addCleanup(argv_patch.stop)
+
+        # Avoid closing other log handlers during the tests.
+        shutdown_patch = patch.object(runner.logging, "shutdown")
+        shutdown_patch.start()
+        self.addCleanup(shutdown_patch.stop)
+
+    def assert_failure_email(self, expected_code):
+        # Exactly one attempt should be made.
+        self.send_email.assert_called_once()
+
+        subject, body = self.send_email.call_args.args
+        self.assertEqual(
+            subject, "World Bank Pipeline - Failure Alert"
+        )
+        self.assertIn(f"Exit code: {expected_code}\n", body)
+        self.assertIn(str(self.log_path), body)
+
+    def test_success_does_not_send_failure_email(self):
+        # Simulate a successful pipeline.
+        self.run_pipeline.return_value = 0
+
+        result = runner.main()
+
+        self.assertEqual(result, 0)
+        self.run_pipeline.assert_called_once()
+        self.send_email.assert_not_called()
+
+    def test_pipeline_failure_sends_one_email(self):
+        # Use 3 to check that the actual failure code is preserved.
+        self.run_pipeline.return_value = 3
+
+        result = runner.main()
+
+        self.assertEqual(result, 3)
+        self.assert_failure_email(3)
+
+    def test_email_failure_preserves_pipeline_failure_code(self):
+        self.run_pipeline.return_value = 3
+
+        # Simulate Gmail being unreachable without contacting it.
+        self.send_email.side_effect = OSError("Simulated network failure")
+
+        result = runner.main()
+
+        self.assertEqual(result, 3)
+        self.assert_failure_email(3)
+        self.logger.error.assert_any_call(
+            "Could not send failure alert | error_type=%s",
+            "OSError",
+        )
+
+    def test_unexpected_pipeline_error_sends_failure_email(self):
+        # This covers errors like the missing-psql test you ran manually.
+        self.run_pipeline.side_effect = FileNotFoundError(
+            "Simulated missing executable"
+        )
+
+        result = runner.main()
+
+        self.assertEqual(result, 1)
+        self.assert_failure_email(1)
+        self.logger.exception.assert_called_once_with(
+            "Pipeline stopped because of an unexpected error"
+        )
 
 if __name__ == "__main__":
     unittest.main()
