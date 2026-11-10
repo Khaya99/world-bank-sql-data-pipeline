@@ -184,6 +184,9 @@ computer used to save them. The scheduled task must use that account.
 - Deliberate missing-psql failure triggered an email alert.
 - Normal pipeline run succeeded with exit code 0.
 - Both report CSVs were validated and published.
+- Task Scheduler run succeeded with result 0x0 and published both reports.
+- A separate scheduled failure test successfully delivered a Gmail alert.
+- The temporary test task was removed after verification.
 
 ### Limitations
 
