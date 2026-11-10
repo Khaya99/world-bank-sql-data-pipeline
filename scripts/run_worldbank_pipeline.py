@@ -10,6 +10,12 @@ import tempfile
 import logging
 import time
 
+# Support both running the script directly and importing it in tests.
+if __package__:
+    from .gmail_alerts import send_email
+else:
+    from gmail_alerts import send_email
+
 def setup_logging(repo):
     log_directory = repo / "logs"
     log_directory.mkdir(parents=True, exist_ok=True)
@@ -266,6 +272,30 @@ def main():
                 elapsed,
             )
 
+        # Send one email if the pipeline failed or was interrupted.
+        if exit_code != 0:
+            try:
+                send_email(
+                    "World Bank Pipeline - Failure Alert",
+                    (
+                        "Your World Bank pipeline did not finish successfully.\n\n"
+                        f"Exit code: {exit_code}\n"
+                        f"Duration: {elapsed:.2f} seconds\n"
+                        f"Log file on your laptop: {log_path}\n\n"
+                        "Open the log file to investigate the problem."
+                    ),
+                )
+                logger.info("Failure alert accepted by Gmail")
+
+            except Exception as alert_error:
+                # An email problem must not replace the pipeline's exit code.
+                # Log only the error type, without exposing credentials.
+                logger.error(
+                    "Could not send failure alert | error_type=%s",
+                    type(alert_error).__name__,
+                )
+
+        # Close the log handlers after attempting the email.
         logging.shutdown()
 
     return exit_code

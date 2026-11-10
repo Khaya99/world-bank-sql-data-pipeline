@@ -160,3 +160,33 @@ Limitations:
 - Automatic log retention cleanup is not configured.
 
 Local logs are excluded from Git.
+
+## Gmail failure alerts
+
+The Python runner attempts to send a Gmail alert when a run fails
+or is interrupted. Successful runs do not trigger a failure alert.
+
+Each alert includes the exit code, duration, and local log file path.
+If sending the email fails, the runner logs the notification error
+and preserves the original pipeline exit code.
+
+### Credentials
+
+The Gmail App Password is stored outside this repository in:
+`%LOCALAPPDATA%\WorldBankPipeline\gmail-credential.xml`
+
+Windows encrypts the credentials for the Windows account and
+computer used to save them. The scheduled task must use that account.
+
+### Verification — 10 November 2026
+
+- Standalone test email received.
+- Deliberate missing-psql failure triggered an email alert.
+- Normal pipeline run succeeded with exit code 0.
+- Both report CSVs were validated and published.
+
+### Limitations
+
+Email delivery requires Internet access and valid Gmail credentials.
+These alerts cannot detect a task that never starts, a powered-off
+laptop, or a process forcibly terminated before the alert code runs.
