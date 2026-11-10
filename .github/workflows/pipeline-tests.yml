@@ -1,0 +1,34 @@
+name: Pipeline offline tests
+
+# Run on pushes, pull requests, or a manual request.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# The workflow only needs to read repository contents.
+permissions:
+  contents: read
+
+jobs:
+  pipeline-tests:
+    name: Pipeline and alert tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      # Copy the repository onto GitHub's temporary computer.
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Use the same Python minor version as your laptop.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # Run the 10 tests using simulated pipeline operations.
+      - name: Run offline tests
+        run: python -m unittest discover -s tests -p "test_pipeline_runner.py" -v
