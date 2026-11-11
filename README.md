@@ -14,7 +14,7 @@ I first built this project in MySQL using deliberately imperfect synthetic data 
 - Updates existing country-year observations through an upsert, with transactional database validation and refresh logging.
 - Exports two CSV reports, checking their headers and 30 unique country codes before replacing each previous report.
 - Records stage outcomes and errors locally, and attempts a Gmail notification when a pipeline run fails.
-- Runs **10 offline orchestration and alert tests** in GitHub Actions on pushes and pull requests.
+- Runs **18 offline orchestration, alert and retention tests** in GitHub Actions on pushes and pull requests.
 
 ## Two datasets, separate purposes
 
@@ -100,6 +100,36 @@ An automatic catch-up run was verified on **1 November 2026**. An on-demand Task
 
 See [monthly task configuration and verification](docs/monthly_schedule.md). Logs and snapshot folder names use UTC; South African local time is two hours ahead. Scheduling updates local data, not GitHub commits or Tableau publications.
 
+## Log and snapshot cleanup
+
+Optional retention keeps **90 days of logs** and **180 days of downloaded snapshots**, while always retaining the newest three matching entries of each type. Age is calculated from the UTC timestamp in the generated filename or folder name.
+
+Preview eligible files without deleting anything:
+
+```powershell
+python scripts/cleanup_pipeline_files.py
+```
+
+After reviewing the preview and backing up any history you need, apply cleanup manually:
+
+```powershell
+python scripts/cleanup_pipeline_files.py --apply
+```
+
+**Removal is permanent; files are not moved to the Recycle Bin.** Run manual cleanup when no other pipeline or file-management operation is running.
+
+To clean up automatically after a successful pipeline run, append `--cleanup-old-files` to the existing runner arguments:
+
+```powershell
+python scripts/run_worldbank_pipeline.py --cleanup-old-files
+```
+
+The local monthly task was configured with this flag on **11 November 2026**. Other installations must opt in separately. Remove the flag to disable automatic cleanup. Failed pipeline runs skip cleanup so their files remain available for investigation.
+
+Cleanup preserves Git-tracked files and skips symbolic links, Windows junctions, unfamiliar names, and snapshot folders with unexpected contents. Only generated log files and snapshot folders containing a single `world_bank_indicators.csv` are eligible. Database records, processed reports and credentials are outside its scope. Git must be available to the account running the task; if the tracked-file check fails, nothing is removed.
+
+Cleanup errors are logged without changing the pipeline result. The integrated cleanup currently logs individual candidates and errors, but is silent when there are no candidates. The standalone command also prints a completion summary. See [retention policy and verification](docs/file_retention.md).
+
 ## Gmail failure alerts
 
 The runner attempts one email when its final exit code is nonzero. Successful runs do not send failure alerts. The message contains the exit code, duration and log file path on the laptop; it does not attach the log. If delivery fails, the notification error is logged and the original pipeline exit code is preserved.
@@ -131,10 +161,10 @@ See [Gmail alert verification](docs/run_logging.md#gmail-failure-alerts).
 
 ## Automated tests and continuous integration
 
-Run the same 10 offline tests used by CI from the repository root:
+Run the same 18 offline tests used by CI from the repository root:
 
 ```powershell
-python -m unittest discover -s tests -p "test_pipeline_runner.py" -v
+python -m unittest discover -s tests -p "test_pipeline*.py" -v
 ```
 
 Use your virtual environment's Python if it is not already activated.
@@ -148,12 +178,15 @@ The tests check:
 - Successful runs do not attempt a failure email.
 - Pipeline failures and unexpected exceptions attempt one failure email.
 - Email delivery errors are logged without replacing the pipeline failure code.
+- Retention previews leave files unchanged; age limits and the newest-three rule are respected.
+- Committed snapshots, unexpected folder contents and symbolic links are preserved; Git failures prevent cleanup.
+- Automatic cleanup requires opt-in and pipeline success; cleanup errors preserve the pipeline exit code.
 
 These tests mock external pipeline operations and email delivery. They need no API access, PostgreSQL server or Gmail credentials. Expected simulated failures can print tracebacks while the test suite still ends with `OK`.
 
-[GitHub Actions](https://github.com/Khaya99/world-bank-sql-data-pipeline/actions) runs this suite on a Windows runner with Python 3.13 for pushes and pull requests, and supports manual execution. The configuration is [pipeline-tests.yml](.github/workflows/pipeline-tests.yml). All 10 tests passed locally and in GitHub Actions during setup.
+[GitHub Actions](https://github.com/Khaya99/world-bank-sql-data-pipeline/actions) runs this suite on a Windows runner with Python 3.13 for pushes and pull requests, and supports manual execution. The configuration is [pipeline-tests.yml](.github/workflows/pipeline-tests.yml). The expanded 18-test suite completed successfully locally and in GitHub Actions. The local Windows run passed 17 tests and skipped one symbolic-link test; that check is skipped when the account cannot create symbolic links.
 
-This CI job covers `test_pipeline_runner.py`; it does not run every test file in the repository or verify live API, database, SMTP or Task Scheduler behaviour. The repository also includes separate API retry/coverage tests and a PostgreSQL failure/rollback test. See [extraction progress](docs/api_extraction_progress.md) and [database failure testing](docs/run_logging.md#verified-behavior) for their scope.
+This CI job discovers `test_pipeline*.py`, covering `test_pipeline_runner.py` and `test_pipeline_cleanup.py`; it does not run every test file in the repository or verify live API, database, SMTP or Task Scheduler behaviour. The repository also includes separate API retry/coverage tests and a PostgreSQL failure/rollback test. See [extraction progress](docs/api_extraction_progress.md) and [database failure testing](docs/run_logging.md#verified-behavior) for their scope.
 
 ## Tableau and official-data analysis
 
@@ -205,6 +238,7 @@ These are relationships in the synthetic data. They do not prove that one indica
 | --- | --- |
 | `scripts/fetch_worldbank.py` | API extraction, retry handling and completeness reporting |
 | `scripts/run_worldbank_pipeline.py` | Pipeline orchestration, report validation, logging and alert integration |
+| `scripts/cleanup_pipeline_files.py` | Preview and optional removal of expired logs and snapshots |
 | `scripts/gmail_alerts.py` | Windows credential loading and Gmail delivery |
 | `sql/` | Synthetic-data workflow and official-data staging, validation, upsert and analysis SQL |
 | `sql/maintenance/` | Corrections and refresh failure handling |
@@ -223,7 +257,7 @@ These are relationships in the synthetic data. They do not prove that one indica
 - Each report is replaced separately after validation. A committed database refresh and an earlier report can remain updated if a later export fails; the entire pipeline is not one transaction.
 - Subprocess output is logged when each command completes, not streamed live. Forced termination may leave no final status and a database run marked `running`.
 - Alerts depend on network access and valid credentials. They cannot detect a powered-off laptop, a task that never starts, or failures before the runner's error-handling block is active.
-- Logs and downloaded snapshots have no automatic retention cleanup. There is no automatic whole-pipeline recovery or missed-run alerting.
+- Retention is opt-in and requires Git. Cleanup errors do not trigger a failure email or change the pipeline exit code; inspect the log. There is no automatic whole-pipeline recovery or missed-run alerting.
 - Official API metadata reflects current classifications, not necessarily historical region or income-group classifications. Correlations describe associations and do not establish causation.
 - Some setup scripts, database tests and Tableau connections retain local Windows paths. Review these when reproducing the project on another computer.
 
@@ -235,6 +269,7 @@ These are relationships in the synthetic data. They do not prove that one indica
 - [API extraction history](docs/api_extraction_progress.md)
 - [Run logging, report exports and Gmail alerts](docs/run_logging.md)
 - [Monthly scheduling](docs/monthly_schedule.md)
+- [Log and snapshot retention](docs/file_retention.md)
 - [Brazil and Mexico corrections](docs/brazil_mexico_corrections.md)
 
 Some linked notes describe earlier milestones. The current runner and CI workflow define the implemented behaviour described above.
