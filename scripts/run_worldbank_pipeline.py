@@ -13,8 +13,10 @@ import time
 # Support both running the script directly and importing it in tests.
 if __package__:
     from .gmail_alerts import send_email
+    from .cleanup_pipeline_files import cleanup
 else:
     from gmail_alerts import send_email
+    from cleanup_pipeline_files import cleanup
 
 def setup_logging(repo):
     log_directory = repo / "logs"
@@ -231,6 +233,8 @@ def main():
     parser.add_argument("--port", type=int, default=5432)
     parser.add_argument("--user", default="postgres")
     parser.add_argument("--database", default="world_bank_analytics")
+    parser.add_argument("--cleanup-old-files", action="store_true",
+                        help="Remove expired logs/snapshots after success")
     args = parser.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -294,6 +298,13 @@ def main():
                     "Could not send failure alert | error_type=%s",
                     type(alert_error).__name__,
                 )
+
+        # Cleanup is opt-in and must never hide the original run outcome.
+        if exit_code == 0 and args.cleanup_old_files:
+            try:
+                cleanup(repo, apply=True)
+            except Exception:
+                logger.exception("Cleanup failed; pipeline result is unchanged")
 
         # Close the log handlers after attempting the email.
         logging.shutdown()

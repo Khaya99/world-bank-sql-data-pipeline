@@ -29,6 +29,6 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Run the 10 tests using simulated pipeline operations.
+      # Run offline orchestration, alert and retention tests.
       - name: Run offline tests
-        run: python -m unittest discover -s tests -p "test_pipeline_runner.py" -v
+        run: python -m unittest discover -s tests -p "test_pipeline*.py" -v
