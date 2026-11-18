@@ -92,8 +92,10 @@ LIMIT 1;
 The database log covers the refresh step, not extraction. Extraction failures can
 occur before any database log entry exists. The Python runner now writes timestamped logs under `logs/`, including stage outcomes, subprocess output and error tracebacks. Subprocess output is recorded when each command finishes. A forced stop or connection loss may leave a `running` log entry requiring investigation. See [run logging](run_logging.md).
 
-Snapshots use UTC timestamps in their folder names. Downloads remain on disk;
-automatic retention cleanup is not configured. The scheduled task updates local
+Snapshots use UTC timestamps in their folder names. Downloads remain on disk
+unless optional cleanup is enabled. The runner supports `--cleanup-old-files`
+after a successful run; scheduled cleanup requires that flag in the task's
+action arguments. See [retention rules and preview commands](run_logging.md#optional-log-and-snapshot-cleanup). The scheduled task updates local
 data and PostgreSQL only: it does not commit or push changes to GitHub.
 
 ### Verification after adding the report export

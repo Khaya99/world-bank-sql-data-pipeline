@@ -157,7 +157,7 @@ Verification:
 Limitations:
 - Subprocess output is logged after each command finishes, not streamed live.
 - A forced termination may prevent the final status from being logged.
-- Automatic log retention cleanup is not configured.
+- Retention cleanup is optional and disabled unless explicitly requested; see below.
 
 Local logs are excluded from Git.
 
@@ -193,3 +193,95 @@ computer used to save them. The scheduled task must use that account.
 Email delivery requires Internet access and valid Gmail credentials.
 These alerts cannot detect a task that never starts, a powered-off
 laptop, or a process forcibly terminated before the alert code runs.
+
+## Optional log and snapshot cleanup
+
+The helper `scripts/cleanup_pipeline_files.py` manages generated local files.
+Cleanup is disabled by default in the pipeline runner. The README records that
+the local monthly task opted in on 11 November 2026. See also the
+[retention policy](file_retention.md) for operational guidance.
+
+### Retention rules
+
+| Files | Eligible age | Additional retention |
+| --- | --- | --- |
+| Matching `logs/pipeline_<UTC timestamp>.log` files | Older than 90 days | Keep the newest three matching logs |
+| Matching UTC-stamped folders under `data/official/` | Older than 180 days | Keep the newest three matching snapshot folders |
+
+Age comes from the UTC timestamp in the name, not the file's modification time.
+The newest-three rule applies separately to logs and snapshots, even when those
+entries exceed the age limit. Limits are defined in the helper; there are no
+command-line options to change them.
+
+Git-tracked files and snapshots containing tracked files are preserved. Git must
+be available and its tracked-file check must succeed before deletion begins.
+Unrecognised names, invalid timestamps, symbolic links, Windows junctions/reparse
+points and redirected parent directories are skipped.
+
+A snapshot folder is eligible only if it contains exactly one ordinary file
+named `world_bank_indicators.csv`. Folders with extra or unknown contents are
+preserved. The helper removes that CSV and its empty folder without recursive
+deletion. Processed reports, synthetic data, Tableau files and PostgreSQL tables
+are outside its scope.
+
+### Preview first
+
+From the repository root in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cleanup_pipeline_files.py
+$LASTEXITCODE
+```
+
+This lists eligible paths as `Cleanup preview` without deleting files or running
+the pipeline. If nothing is eligible, only the policy and completion summary
+appear. Output goes to the terminal.
+
+After reviewing the paths, permanently remove currently eligible files with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cleanup_pipeline_files.py --apply
+$LASTEXITCODE
+```
+
+Apply recalculates eligibility; it does not reuse a saved preview. Standalone
+cleanup does not require a successful pipeline run. It returns `0` when there
+are no removal failures (including when nothing is eligible), and a nonzero
+code on failure. Removal errors appear in the terminal. Earlier removals are
+not rolled back if a later removal fails.
+
+### Cleanup after a successful run
+
+To run the real pipeline and then apply cleanup:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_worldbank_pipeline.py --cleanup-old-files
+$LASTEXITCODE
+```
+
+This downloads data, refreshes PostgreSQL and exports reports as usual. Cleanup
+runs only if the pipeline returns `0` and the flag was supplied. Failed or
+interrupted runs skip cleanup. Cleanup messages and errors go to the terminal
+and run log. Cleanup errors preserve the successful pipeline exit code and do
+not trigger a pipeline failure email; inspect the log for the cleanup outcome.
+
+A manual command does not change Windows Task Scheduler. Scheduled cleanup
+requires the same flag in the task's action arguments. This documentation
+change does not enable cleanup or alter the scheduled task.
+
+### Verification
+
+`tests/test_pipeline_cleanup.py` uses temporary fixtures to check preview
+behaviour, age limits, keeping the newest three entries, tracked-file and
+unknown-content protection, Git failure and symbolic-link protection. It also
+checks success-only opt-in cleanup and preservation of the pipeline success
+code when cleanup fails. The symbolic-link test skips when Windows does not
+permit creating links.
+
+Run the focused offline tests with:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p "test_pipeline_cleanup.py" -v
+```
+
+These tests do not delete real pipeline logs or snapshots.
